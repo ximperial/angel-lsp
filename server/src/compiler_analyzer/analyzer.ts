@@ -30,6 +30,7 @@ import {
     NodeLiteral,
     NodeName,
     NodeParamList,
+    ReferenceModifier,
     NodeReturn,
     NodeScope,
     NodeStatBlock,
@@ -67,6 +68,8 @@ import {
     resolvedBuiltinDouble,
     resolvedBuiltinFloat,
     resolvedBuiltinInt,
+    resolvedBuiltinNil,
+    resolvedBuiltinNull,
     tryGetBuiltinType
 } from "./builtinType";
 import {
@@ -259,6 +262,7 @@ export function analyzeParamList(scope: SymbolScope, paramList: NodeParamList) {
 export function analyzeType(scope: SymbolScope, nodeType: NodeType): ResolvedType | undefined {
     const reservedType = nodeType.isArray ? undefined : analyzeReservedType(scope, nodeType);
     if (reservedType !== undefined) return reservedType;
+    const isHandler = nodeType.refModifier === ReferenceModifier.At || nodeType.refModifier === ReferenceModifier.AtConst;
 
     const typeIdentifier = nodeType.dataType.identifier;
 
@@ -283,7 +287,8 @@ export function analyzeType(scope: SymbolScope, nodeType: NodeType): ResolvedTyp
                 scope,
                 typeIdentifier,
                 specializationSymbol.symbol,
-                specializationSymbol.scope
+                specializationSymbol.scope,
+                isHandler
             );
         }
     }
@@ -311,7 +316,7 @@ export function analyzeType(scope: SymbolScope, nodeType: NodeType): ResolvedTyp
         return undefined;
     } else {
         const typeTemplates = analyzeTemplateTypes(scope, givenTypeTemplates, foundSymbol.templateTypes);
-        return completeAnalyzingType(scope, typeIdentifier, foundSymbol, foundScope, undefined, typeTemplates);
+        return completeAnalyzingType(scope, typeIdentifier, foundSymbol, foundScope, isHandler, typeTemplates);
     }
 }
 
@@ -1069,7 +1074,7 @@ function analyzeLambda(scope: SymbolScope, lambda: NodeLambda): ResolvedType | u
     return undefined;
 }
 
-// BNF: LITERAL       ::= NUMBER | STRING | BITS | 'true' | 'false' | 'null'
+// BNF: LITERAL       ::= NUMBER | STRING | BITS | 'true' | 'false' | 'null' | 'nil'
 function analyzeLiteral(scope: SymbolScope, literal: NodeLiteral): ResolvedType | undefined {
     const literalValue = literal.value;
     if (literalValue.isNumberToken()) {
@@ -1097,7 +1102,14 @@ function analyzeLiteral(scope: SymbolScope, literal: NodeLiteral): ResolvedType 
         return resolvedBuiltinBool;
     }
 
-    // FIXME: Handling null?
+    if (literalValue.text === 'null') {
+        return resolvedBuiltinNull;
+    }
+
+    if (literalValue.text === 'nil') {
+        return resolvedBuiltinNil;
+    }
+
     return undefined;
 }
 

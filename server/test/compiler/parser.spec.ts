@@ -104,6 +104,8 @@ describe("Parser", () => {
 
     expectSuccess(`bool foo = not true; bool bar = not not false;`);
 
+    expectSuccess(`void foo() { auto a = null; auto b = nil; }`);
+
     expectSuccess(`\uFEFF // <-- BOM
         void foo() { }`
     );

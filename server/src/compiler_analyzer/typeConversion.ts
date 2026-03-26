@@ -87,6 +87,30 @@ function evaluateTypeConversionInternal(
         }
     }
 
+    if (src.isNullType()) {
+        if (dest.isNullType()) {
+            return {cost: ConversionCost.NoConv};
+        }
+
+        if (dest.isHandler === true) {
+            return {cost: ConversionCost.RefConv};
+        }
+
+        return undefined;
+    }
+
+    if (src.isNilType()) {
+        if (dest.isNilType()) {
+            return {cost: ConversionCost.NoConv};
+        }
+
+        if (destTypeOrFunc.isType() && isWarcraftHandleType(destTypeOrFunc)) {
+            return {cost: ConversionCost.RefConv};
+        }
+
+        return undefined;
+    }
+
     // Template types must be the same
     if (areTemplateTypesEqual(src, dest) === false) return undefined;
 
@@ -524,4 +548,23 @@ function collectOpConvFunctions(srcType: SymbolType | SymbolFunction) {
     }
 
     return convFuncList;
+}
+
+function isWarcraftHandleType(type: SymbolType): boolean {
+    if (type.identifierText === 'handle') {
+        return true;
+    }
+
+    for (const baseType of type.baseList) {
+        const base = baseType?.typeOrFunc;
+        if (base === undefined || base.isType() === false) {
+            continue;
+        }
+
+        if (isWarcraftHandleType(base)) {
+            return true;
+        }
+    }
+
+    return false;
 }

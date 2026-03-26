@@ -2391,7 +2391,7 @@ function canParseLambda(parser: ParserState): boolean {
     return false;
 }
 
-// BNF: LITERAL       ::= NUMBER | STRING | BITS | 'true' | 'false' | 'null'
+// BNF: LITERAL       ::= NUMBER | STRING | BITS | 'true' | 'false' | 'null' | 'nil'
 function parseLiteral(parser: ParserState): NodeLiteral | undefined {
     const next = parser.next();
     if (next.kind === TokenKind.Number) {
@@ -2402,7 +2402,7 @@ function parseLiteral(parser: ParserState): NodeLiteral | undefined {
         parser.commit(HighlightForToken.String);
         return {nodeName: NodeName.Literal, nodeRange: new TokenRange(next, next), value: next};
     }
-    if (next.text === 'true' || next.text === 'false' || next.text === 'null') {
+    if (next.text === 'true' || next.text === 'false' || next.text === 'null' || next.text === 'nil') {
         parser.commit(HighlightForToken.Keyword);
         return {nodeName: NodeName.Literal, nodeRange: new TokenRange(next, next), value: next};
     }

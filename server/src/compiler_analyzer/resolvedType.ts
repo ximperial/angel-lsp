@@ -146,4 +146,12 @@ export class ResolvedType {
     public isAnyType(): boolean {
         return this.typeOrFunc.isType() && this.typeOrFunc.identifierText === '?';
     }
+
+    public isNullType(): boolean {
+        return this.typeOrFunc.isType() && this.typeOrFunc.identifierText === 'null';
+    }
+
+    public isNilType(): boolean {
+        return this.typeOrFunc.isType() && this.typeOrFunc.identifierText === 'nil';
+    }
 }

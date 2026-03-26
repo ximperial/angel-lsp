@@ -614,7 +614,7 @@ export interface ParsedLambdaParams {
     readonly identifier: TokenObject | undefined
 }
 
-// BNF: LITERAL       ::= NUMBER | STRING | BITS | 'true' | 'false' | 'null'
+// BNF: LITERAL       ::= NUMBER | STRING | BITS | 'true' | 'false' | 'null' | 'nil'
 export interface NodeLiteral extends NodeBase {
     readonly nodeName: NodeName.Literal;
     readonly value: TokenObject;

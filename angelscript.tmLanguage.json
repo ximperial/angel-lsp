@@ -80,6 +80,9 @@
             "name": "string.quoted.double.angelscript",
             "patterns": [
                 {
+                    "include": "#wc3_color_code"
+                },
+                {
                     "include": "#string_escaped_char"
                 },
                 {
@@ -453,6 +456,9 @@
                     "name": "string.quoted.double.angelscript",
                     "patterns": [
                         {
+                            "include": "#wc3_color_code"
+                        },
+                        {
                             "include": "#string_escaped_char"
                         },
                         {
@@ -474,6 +480,39 @@
                         }
                     },
                     "name": "string.quoted.single.angelscript",
+                    "patterns": [
+                        {
+                            "include": "#wc3_color_code"
+                        },
+                        {
+                            "include": "#string_escaped_char"
+                        },
+                        {
+                            "include": "#line_continuation_character"
+                        }
+                    ]
+                }
+            ]
+        },
+        "wc3_color_code": {
+            "patterns": [
+                {
+                    "begin": "(\\|c)([0-9A-Fa-f]{8})",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "punctuation.definition.color.begin.wc3.angelscript"
+                        },
+                        "2": {
+                            "name": "constant.other.color.hex.wc3.angelscript"
+                        }
+                    },
+                    "end": "(\\|r)",
+                    "endCaptures": {
+                        "1": {
+                            "name": "punctuation.definition.color.end.wc3.angelscript"
+                        }
+                    },
+                    "name": "meta.string.wc3.colorized.angelscript",
                     "patterns": [
                         {
                             "include": "#string_escaped_char"

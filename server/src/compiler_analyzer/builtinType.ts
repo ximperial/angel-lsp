@@ -48,6 +48,14 @@ export const builtinBoolType: SymbolType = createBuiltinType(TokenReserved.creat
 
 export const resolvedBuiltinBool: ResolvedType = new ResolvedType(builtinBoolType);
 
+export const builtinNullType: SymbolType = createBuiltinType(TokenReserved.createVirtual('null'));
+
+export const resolvedBuiltinNull: ResolvedType = new ResolvedType(builtinNullType);
+
+export const builtinNilType: SymbolType = createBuiltinType(TokenReserved.createVirtual('nil'));
+
+export const resolvedBuiltinNil: ResolvedType = new ResolvedType(builtinNilType);
+
 export const builtinVoidType: SymbolType = createBuiltinType(TokenReserved.createVirtual('void'));
 
 export const builtinAnyType: SymbolType = createBuiltinType(TokenReserved.createVirtual('?'));
