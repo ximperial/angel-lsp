@@ -128,6 +128,46 @@ describe('fileUtils', () => {
             assert(result.includes('test.as'));
         });
 
+        it('should resolve Windows parent-relative paths using backslashes', () => {
+            const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'include-parent-test-'));
+            const childDir = path.join(rootDir, 'Core', 'Items');
+            const parentFile = path.join(rootDir, 'Core', 'GeneralSystem.as');
+            const baseFile = path.join(childDir, 'ItemApi.as');
+
+            fs.mkdirSync(childDir, {recursive: true});
+            fs.writeFileSync(parentFile, '// parent include');
+            fs.writeFileSync(baseFile, '#include "..\\\\GeneralSystem.as"');
+
+            try {
+                const baseUri = pathToFileURL(baseFile).toString();
+                const result = resolveIncludeUri(baseUri, '..\\GeneralSystem.as');
+                assert(result.includes('/Core/GeneralSystem.as'));
+                assert.match(result, /file:\/\/\/[a-z]%3A\//);
+            } finally {
+                fs.rmSync(rootDir, {recursive: true, force: true});
+            }
+        });
+
+        it('should resolve doubly-escaped Windows include paths from string tokens', () => {
+            const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'include-escaped-test-'));
+            const childDir = path.join(rootDir, 'Core', 'Items');
+            const parentFile = path.join(rootDir, 'Core', 'GeneralSystem.as');
+            const baseFile = path.join(childDir, 'ItemApi.as');
+
+            fs.mkdirSync(childDir, {recursive: true});
+            fs.writeFileSync(parentFile, '// parent include');
+            fs.writeFileSync(baseFile, '#include "..\\\\GeneralSystem.as"');
+
+            try {
+                const baseUri = pathToFileURL(baseFile).toString();
+                const result = resolveIncludeUri(baseUri, '..\\\\GeneralSystem.as');
+                assert(result.includes('/Core/GeneralSystem.as'));
+                assert.match(result, /file:\/\/\/[a-z]%3A\//);
+            } finally {
+                fs.rmSync(rootDir, {recursive: true, force: true});
+            }
+        });
+
         it('should append default extension for files without extension', () => {
             resetGlobalSettings({
                 ...copyGlobalSettings(),

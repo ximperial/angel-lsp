@@ -59,6 +59,8 @@ export class AnalysisResolver {
 
     private readonly _resolvedPredefinedFilepaths: Set<string> = new Set();
 
+    private readonly _analyzingUris: Set<string> = new Set();
+
     public constructor(
         public readonly _inspectRecords: Map<string, PartialInspectRecord>,
         private readonly _inspectRequest: InspectRequest,
@@ -148,37 +150,46 @@ export class AnalysisResolver {
     }
 
     private analyzeFile(record: PartialInspectRecord) {
+        if (this._analyzingUris.has(record.uri)) {
+            return;
+        }
+
+        this._analyzingUris.add(record.uri);
         const predefinedUri = this.findPredefinedUri(record.uri);
 
-        logger.message(`[Analyzer]\n${record.uri}`);
+        try {
+            logger.message(`[Analyzer]\n${record.uri}`);
 
-        // -----------------------------------------------
-        analyzerDiagnostic.beginSession();
+            // -----------------------------------------------
+            analyzerDiagnostic.beginSession();
 
-        // Collect scopes in included files
-        const includeScopes = this.collectIncludeScope(record, predefinedUri);
+            // Collect scopes in included files
+            const includeScopes = this.collectIncludeScope(record, predefinedUri);
 
-        const profiler = new Profiler();
+            const profiler = new Profiler();
 
-        // Execute the hoist
-        const hoistResult = hoistAfterParsed(record.ast, createGlobalScope(record.uri, includeScopes));
-        profiler.mark('Hoist'.padEnd(profilerDescriptionLength));
+            // Execute the hoist
+            const hoistResult = hoistAfterParsed(record.ast, createGlobalScope(record.uri, includeScopes));
+            profiler.mark('Hoist'.padEnd(profilerDescriptionLength));
 
-        // Execute the analyzer
-        record.analyzerScope = analyzeAfterHoisted(record.uri, hoistResult);
-        profiler.mark('Analyzer'.padEnd(profilerDescriptionLength));
+            // Execute the analyzer
+            record.analyzerScope = analyzeAfterHoisted(record.uri, hoistResult);
+            profiler.mark('Analyzer'.padEnd(profilerDescriptionLength));
 
-        record.diagnosticsInAnalyzer = analyzerDiagnostic.endSession();
-        // -----------------------------------------------
+            record.diagnosticsInAnalyzer = analyzerDiagnostic.endSession();
+            // -----------------------------------------------
 
-        record.isAnalyzerPending = false;
+            record.isAnalyzerPending = false;
 
-        this._diagnosticsCallback({
-            uri: record.uri,
-            diagnostics: [...record.diagnosticsInParser, ...record.diagnosticsInAnalyzer]
-        });
+            this._diagnosticsCallback({
+                uri: record.uri,
+                diagnostics: [...record.diagnosticsInParser, ...record.diagnosticsInAnalyzer]
+            });
 
-        logger.message(`(${process.memoryUsage().heapUsed / 1024 / 1024} MB used)`);
+            logger.message(`(${process.memoryUsage().heapUsed / 1024 / 1024} MB used)`);
+        } finally {
+            this._analyzingUris.delete(record.uri);
+        }
     }
 
     // We will reanalyze the files that include the file specified by the given URI.
@@ -346,9 +357,16 @@ export class AnalysisResolver {
 
         // Get the analyzed scope of included files
         for (const uri of includePaths) {
-            const includeRecord = this._inspectRecords.get(uri);
+            let includeRecord = this._inspectRecords.get(uri);
             if (includeRecord !== undefined) {
-                includedScopes.push(includeRecord.analyzerScope);
+                if (includeRecord.isAnalyzerPending && this._analyzingUris.has(uri) === false) {
+                    this.analyzeFile(includeRecord);
+                    includeRecord = this._inspectRecords.get(uri);
+                }
+
+                if (includeRecord !== undefined) {
+                    includedScopes.push(includeRecord.analyzerScope);
+                }
                 continue;
             }
 
@@ -356,6 +374,16 @@ export class AnalysisResolver {
             const content = readFileContent(uri);
             if (content !== undefined) {
                 this._inspectRequest(uri, content);
+
+                includeRecord = this._inspectRecords.get(uri);
+                if (includeRecord !== undefined) {
+                    if (includeRecord.isAnalyzerPending && this._analyzingUris.has(uri) === false) {
+                        this.analyzeFile(includeRecord);
+                    }
+
+                    includedScopes.push(includeRecord.analyzerScope);
+                }
+
                 continue;
             }
 

@@ -2,7 +2,7 @@ import {
     SymbolFunction, SymbolFunctionHolder, SymbolObject, SymbolVariable,
 } from "./symbolObject";
 import {stringifyResolvedType, stringifyResolvedTypes} from "./symbolUtils";
-import {getActiveGlobalScope, resolveActiveScope, SymbolScope} from "./symbolScope";
+import {getActiveGlobalScope, tryResolveActiveScope, SymbolScope} from "./symbolScope";
 import {applyTemplateTranslator, ResolvedType, TemplateTranslator} from "./resolvedType";
 import {analyzerDiagnostic} from "./analyzerDiagnostic";
 import {TokenObject} from "../compiler_tokenizer/tokenObject";
@@ -138,7 +138,10 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
             continue;
         }
 
-        if (bestMatching === undefined || evaluated < bestMatching.cost) {
+        if (bestMatching === undefined ||
+            evaluated < bestMatching.cost ||
+            (evaluated === bestMatching.cost && shouldPreferFunction(callee, bestMatching.function))
+        ) {
             // Update the best matching function.
             bestMatching = {function: callee, cost: evaluated, sideEffects: sideEffectBuffer};
         }
@@ -169,7 +172,7 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
                 handleMismatchError(args, mismatchReason);
 
                 // Although the function call resolution fails, a fallback symbol is added as a reference.
-                const fallbackCallee = calleeFuncHolder.first;
+                const fallbackCallee = getPreferredFunction(calleeFuncHolder);
                 getActiveGlobalScope().pushReference(({
                     toSymbol: calleeDelegateVariable ?? fallbackCallee, fromToken: callerIdentifier
                 }));
@@ -182,7 +185,8 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
 
 function pushReferenceToNamedArguments(callerArgs: CallerArgument[], callee: SymbolFunction) {
     if (callee.functionScopePath === undefined) return;
-    const functionScope = resolveActiveScope(callee.functionScopePath);
+    const functionScope = tryResolveActiveScope(callee.functionScopePath);
+    if (functionScope === undefined) return;
 
     for (const args of callerArgs) {
         if (args.name === undefined) continue;
@@ -202,11 +206,12 @@ function pushReferenceToNamedArguments(callerArgs: CallerArgument[], callee: Sym
 function evaluateDelegateCast(args: FunctionCallArgs): FunctionCallResult | undefined {
     const {callerIdentifier, callerArgs, calleeFuncHolder, calleeTemplateTranslator} = args;
 
-    if (calleeFuncHolder.first.linkedNode.nodeName !== NodeName.FuncDef) return undefined;
+    const preferredCallee = getPreferredFunction(calleeFuncHolder);
+    if (preferredCallee.linkedNode.nodeName !== NodeName.FuncDef) return undefined;
 
     // If the callee is a delegate, check if it can be cast to a delegate.
     const delegateType = ResolvedType.create({
-        typeOrFunc: calleeFuncHolder.first,
+        typeOrFunc: preferredCallee,
         templateTranslator: calleeTemplateTranslator
     });
 
@@ -220,14 +225,14 @@ function evaluateDelegateCast(args: FunctionCallArgs): FunctionCallResult | unde
     }
 
     return {
-        bestMatching: calleeFuncHolder.first,
+        bestMatching: preferredCallee,
         returnType: applyTemplateTranslator(delegateType, calleeTemplateTranslator),
         sideEffect: () => {
             causeTypeConversionSideEffect(evaluation, callerArgs[0].type, delegateType, callerArgs[0].range);
 
             // Add the reference to the function that was called.
             getActiveGlobalScope().pushReference(({
-                toSymbol: calleeFuncHolder.first, fromToken: callerIdentifier
+                toSymbol: preferredCallee, fromToken: callerIdentifier
             }));
 
             // Probably we do not need to add references to named arguments for delegates.
@@ -469,4 +474,18 @@ function handleMismatchError(args: FunctionCallArgs, mismatchReason: MismatchRea
 
         analyzerDiagnostic.error(callerRange.getBoundingLocation(), message);
     }
+}
+
+function getPreferredFunction(holder: SymbolFunctionHolder): SymbolFunction {
+    return holder.toList().reduce((best, candidate) =>
+        shouldPreferFunction(candidate, best) ? candidate : best
+    );
+}
+
+function shouldPreferFunction(candidate: SymbolFunction, current: SymbolFunction): boolean {
+    return getFunctionPriority(candidate) < getFunctionPriority(current);
+}
+
+function getFunctionPriority(symbol: SymbolFunction): number {
+    return symbol.identifierToken.location.path.endsWith('as.predefined') ? 1 : 0;
 }

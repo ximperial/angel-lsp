@@ -170,6 +170,10 @@ export class SymbolScope {
         this._linkedNode = node;
     }
 
+    public replaceLinkedNode(node: ScopeLinkedNode) {
+        this._linkedNode = node;
+    }
+
     public get linkedNode(): ScopeLinkedNode | undefined {
         return this._linkedNode;
     }
@@ -279,6 +283,15 @@ export class SymbolScope {
     public insertScopeAndCheck(identifier: TokenObject, linkedNode: ScopeLinkedNode | undefined): SymbolScope {
         const scope = this.insertScope(identifier.text, linkedNode);
         if (linkedNode !== undefined && linkedNode !== scope.linkedNode) {
+            if (scope.linkedNode !== undefined && isPredefinedShadowedByProjectSymbol(scope.linkedNode.nodeRange.path, linkedNode.nodeRange.path)) {
+                scope.replaceLinkedNode(linkedNode);
+                return scope;
+            }
+
+            if (scope.linkedNode !== undefined && isPredefinedShadowedByProjectSymbol(linkedNode.nodeRange.path, scope.linkedNode.nodeRange.path)) {
+                return scope;
+            }
+
             // e.g., if a scope for a class 'F' already exists, a scope for a function 'F' cannot be created.
             errorAlreadyDeclared(identifier);
         }
@@ -311,8 +324,18 @@ export class SymbolScope {
     public insertSymbol(symbol: SymbolObject): SymbolObjectHolder | undefined {
         const identifier = symbol.identifierToken.text;
         const alreadyExists = this._symbolTable.get(identifier);
+        const incomingHolder = symbol.toHolder();
         if (alreadyExists === undefined) {
-            this._symbolTable.set(identifier, symbol.toHolder());
+            this._symbolTable.set(identifier, incomingHolder);
+            return undefined;
+        }
+
+        if (canPreferProjectSymbolOverPredefined(alreadyExists, incomingHolder)) {
+            this._symbolTable.set(identifier, incomingHolder);
+            return undefined;
+        }
+
+        if (canPreferProjectSymbolOverPredefined(incomingHolder, alreadyExists)) {
             return undefined;
         }
 
@@ -597,4 +620,27 @@ export function createAnonymousIdentifier(): string {
 
 export function isAnonymousIdentifier(identifier: string): boolean {
     return identifier.startsWith('~');
+}
+
+function isPredefinedPath(path: string): boolean {
+    return path.endsWith('as.predefined');
+}
+
+function isPredefinedShadowedByProjectSymbol(existingPath: string, incomingPath: string): boolean {
+    return isPredefinedPath(existingPath) && !isPredefinedPath(incomingPath);
+}
+
+function canPreferProjectSymbolOverPredefined(existing: SymbolObjectHolder, incoming: SymbolObjectHolder): boolean {
+    if (existing.isFunctionHolder() || incoming.isFunctionHolder()) {
+        return false;
+    }
+
+    if (existing.kind !== incoming.kind) {
+        return false;
+    }
+
+    return isPredefinedShadowedByProjectSymbol(
+        existing.identifierToken.location.path,
+        incoming.identifierToken.location.path
+    );
 }

@@ -6,6 +6,28 @@ import {TokenObject} from "../compiler_tokenizer/tokenObject";
 // the key 'T' is mapped to the type `int`.
 export type TemplateTranslator = Map<TokenObject, ResolvedType | undefined>;
 
+function lookupTranslatedType(
+    translator: TemplateTranslator | undefined,
+    token: TokenObject | undefined
+): ResolvedType | undefined {
+    if (translator === undefined || token === undefined) {
+        return undefined;
+    }
+
+    const directMatch = translator.get(token);
+    if (directMatch !== undefined) {
+        return directMatch;
+    }
+
+    for (const [candidateToken, translatedType] of translator) {
+        if (candidateToken.text === token.text) {
+            return translatedType;
+        }
+    }
+
+    return undefined;
+}
+
 /**
  * Apply the template translator to the target type.
  */
@@ -28,7 +50,7 @@ export function applyTemplateTranslator(target: ResolvedType | undefined, transl
         // The target has no templates.
         if (target.typeOrFunc.isType() && target.typeOrFunc.isTypeParameter) {
             // If the target is a type parameter such as `T`, translate it.
-            return translator.get(target.typeOrFunc.identifierToken) ?? target;
+            return lookupTranslatedType(translator, target.typeOrFunc.identifierToken) ?? target;
         }
 
         return target;
@@ -40,16 +62,20 @@ export function applyTemplateTranslator(target: ResolvedType | undefined, transl
     // Create a new template translator by replacing the template type with the translated type.
     const newTranslator = new Map<TokenObject, ResolvedType | undefined>();
     for (const [token, translatedType] of target.templateTranslator) {
-        if (translatedType?.identifierToken !== undefined && translator.has(translatedType?.identifierToken)) {
+        const translatedLeaf =
+            translatedType?.identifierToken !== undefined
+                ? lookupTranslatedType(translator, translatedType.identifierToken)
+                : undefined;
+        if (translatedLeaf !== undefined) {
             // Replace `T` at the end of the target with the translated type.
-            newTranslator.set(token, translator.get(translatedType?.identifierToken));
+            newTranslator.set(token, translatedLeaf);
         } else {
             // Templates may be nested, so visit recursively.
             newTranslator.set(token, applyTemplateTranslator(translatedType, translator));
         }
     }
 
-    return target.cloneWithTemplateTranslator(translator);
+    return target.cloneWithTemplateTranslator(newTranslator);
 }
 
 /**
@@ -128,8 +154,8 @@ export class ResolvedType {
         if (this.typeOrFunc.templateTypes !== undefined && other.typeOrFunc.templateTypes !== undefined) {
             if (this.typeOrFunc.templateTypes.length !== other.typeOrFunc.templateTypes.length) return false;
 
-            const thisTemplates = this.typeOrFunc.templateTypes.map(type => this.templateTranslator?.get(type));
-            const otherTemplates = other.typeOrFunc.templateTypes.map(type => other.templateTranslator?.get(type));
+            const thisTemplates = this.typeOrFunc.templateTypes.map(type => lookupTranslatedType(this.templateTranslator, type));
+            const otherTemplates = other.typeOrFunc.templateTypes.map(type => lookupTranslatedType(other.templateTranslator, type));
 
             for (let i = 0; i < thisTemplates.length; i++) {
                 if (thisTemplates[i]?.equals(otherTemplates[i]) === false) return false;

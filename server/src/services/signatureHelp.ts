@@ -21,12 +21,12 @@ export function provideSignatureHelp(
         const shouldExtend = info.callerArgumentsNode.nodeRange.end.text == ','; // ',' indicates that user is still typing.
         const location = info.callerArgumentsNode.nodeRange.extendForward(shouldExtend ? 1 : 0); // Extend to the next token of ')'
         if (location.getBoundingLocation().positionInRange(caret)) {
-            const callee = info.calleeFuncHolder.first; // FIXME?
+            const callee = getPreferredFunction(info.calleeFuncHolder.overloadList);
             const expectedCallee =
                 globalScope.resolveScope(callee.scopePath)?.lookupSymbolWithParent(callee.actualIdentifierToken.text);
             if (!expectedCallee?.isFunctionHolder()) continue;
 
-            for (const callee of expectedCallee.overloadList) {
+            for (const callee of sortFunctionsByPriority(expectedCallee.overloadList)) {
                 signatures.push(getFunctionSignature(info, callee, new TextPosition(caret.line, caret.character)));
             }
 
@@ -76,4 +76,16 @@ function getFunctionSignature(info: FunctionCallInfo, expectedCallee: SymbolFunc
     };
 
     return signature;
+}
+
+function sortFunctionsByPriority(functions: readonly SymbolFunction[]): SymbolFunction[] {
+    return [...functions].sort((lhs, rhs) => getFunctionPriority(lhs) - getFunctionPriority(rhs));
+}
+
+function getPreferredFunction(functions: readonly SymbolFunction[]): SymbolFunction {
+    return sortFunctionsByPriority(functions)[0];
+}
+
+function getFunctionPriority(symbol: SymbolFunction): number {
+    return symbol.identifierToken.location.path.endsWith('as.predefined') ? 1 : 0;
 }

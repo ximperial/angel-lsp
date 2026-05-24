@@ -1,4 +1,4 @@
-import {getActiveGlobalScope, resolveActiveScope, SymbolScope} from "./symbolScope";
+import {getActiveGlobalScope, tryResolveActiveScope, SymbolScope} from "./symbolScope";
 import {TokenObject} from "../compiler_tokenizer/tokenObject";
 import {ResolvedType} from "./resolvedType";
 import {analyzerDiagnostic} from "./analyzerDiagnostic";
@@ -20,7 +20,8 @@ export function findConstructorOfType(resolvedType: ResolvedType | undefined): S
     // |-- class 'TypeName' scope
     //     |-- constructor 'TypeName'
 
-    const classScope = resolveActiveScope(resolvedType.scopePath).lookupScope(typeName);
+    const activeTypeScope = tryResolveActiveScope(resolvedType.scopePath);
+    const classScope = activeTypeScope?.lookupScope(typeName);
     return classScope !== undefined ? classScope.lookupSymbol(typeName) : undefined;
 }
 

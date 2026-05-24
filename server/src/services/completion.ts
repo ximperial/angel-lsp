@@ -24,7 +24,7 @@ export interface CompletionItemWrapper {
 export function provideCompletion(
     globalScope: SymbolGlobalScope, caret: TextPosition
 ): CompletionItemWrapper[] {
-    const items = provideCompletion_internal(globalScope, caret);
+    const items = normalizeCompletionItems(provideCompletion_internal(globalScope, caret));
 
     // Assign sort keys to completion items.
     for (const item of items) {
@@ -169,7 +169,12 @@ function autocompleteInstanceMember(
 }
 
 function makeCompletionItem(symbolName: string, symbol: SymbolObjectHolder): CompletionItemWrapper {
-    const item: CompletionItem = {label: symbolName};
+    const item: CompletionItem = {
+        label: symbolName,
+        data: {
+            sourcePriority: isProjectSymbol(symbol) ? '0' : isPredefinedSymbol(symbol) ? '1' : '2'
+        }
+    };
 
     // FIXME: We should classify the completion items more precisely.
 
@@ -192,6 +197,41 @@ function makeCompletionItem(symbolName: string, symbol: SymbolObjectHolder): Com
     return {item, symbol};
 }
 
+function normalizeCompletionItems(items: CompletionItemWrapper[]): CompletionItemWrapper[] {
+    const deduped = new Map<string, CompletionItemWrapper>();
+
+    for (const item of items) {
+        const key = `${item.item.label}\u0000${item.item.kind ?? ''}`;
+        const existing = deduped.get(key);
+        if (existing === undefined || shouldPreferCompletion(item, existing)) {
+            deduped.set(key, item);
+        }
+    }
+
+    return Array.from(deduped.values());
+}
+
+function shouldPreferCompletion(candidate: CompletionItemWrapper, current: CompletionItemWrapper): boolean {
+    return getCompletionPriority(candidate) < getCompletionPriority(current);
+}
+
+function getCompletionPriority(item: CompletionItemWrapper): number {
+    if (item.symbol !== undefined) {
+        if (isProjectSymbol(item.symbol)) return 0;
+        if (isPredefinedSymbol(item.symbol)) return 1;
+    }
+
+    return 2;
+}
+
+function isProjectSymbol(symbol: SymbolObjectHolder): boolean {
+    return !isPredefinedSymbol(symbol);
+}
+
+function isPredefinedSymbol(symbol: SymbolObjectHolder): boolean {
+    return symbol.toList().every(entry => entry.identifierToken.location.path.endsWith('as.predefined'));
+}
+
 // Symbols with underscores are sorted to the back.
 function attackSortKey(item: CompletionItem) {
     const labelText: string = item.label;
@@ -201,7 +241,8 @@ function attackSortKey(item: CompletionItem) {
         underscoreCount++;
     }
 
-    item.sortText = String.fromCharCode(underscoreCount) + labelText;
+    const sourcePrefix = item.data?.sourcePriority ?? '2';
+    item.sortText = sourcePrefix + String.fromCharCode(underscoreCount) + labelText;
 }
 
 // -----------------------------------------------

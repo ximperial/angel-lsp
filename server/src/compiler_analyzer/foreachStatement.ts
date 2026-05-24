@@ -1,7 +1,7 @@
 import {ResolvedType} from "./resolvedType";
 import {analyzerDiagnostic} from "./analyzerDiagnostic";
 import {TokenRange} from "../compiler_tokenizer/tokenRange";
-import {resolveActiveScope} from "./symbolScope";
+import {tryResolveActiveScope} from "./symbolScope";
 import {SymbolObjectHolder} from "./symbolObject";
 
 export function checkForEachIterator(
@@ -26,7 +26,14 @@ export function checkForEachIterator(
         return undefined;
     }
 
-    const memberScope = resolveActiveScope(iteratorType.typeOrFunc.membersScopePath);
+    const memberScope = tryResolveActiveScope(iteratorType.typeOrFunc.membersScopePath);
+    if (memberScope === undefined) {
+        analyzerDiagnostic.error(
+            nodeRange.getBoundingLocation(),
+            "The iterator type members are not available",
+        );
+        return undefined;
+    }
 
     const opForBegin = memberScope.lookupSymbol('opForBegin');
     const opForEnd = memberScope.lookupSymbol('opForEnd');

@@ -9,7 +9,7 @@ import {
 import {
     isAnonymousIdentifier,
     isScopeChildOrGrandchild,
-    resolveActiveScope,
+    tryResolveActiveScope,
     SymbolAndScope, SymbolGlobalScope,
     SymbolScope
 } from "./symbolScope";
@@ -155,7 +155,10 @@ export function canAccessInstanceMember(accessScope: SymbolScope, instanceMember
 
     if (instanceMemberSymbol.accessRestriction === undefined) return true;
 
-    const scopeOfInstanceMember = resolveActiveScope(instanceMemberSymbol.scopePath);
+    const scopeOfInstanceMember = tryResolveActiveScope(instanceMemberSymbol.scopePath);
+    if (scopeOfInstanceMember === undefined) {
+        return false;
+    }
 
     const typeOfInstanceMember = scopeOfInstanceMember.parentScope?.lookupSymbol(scopeOfInstanceMember.key);
 

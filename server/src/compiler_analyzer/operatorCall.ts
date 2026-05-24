@@ -1,4 +1,4 @@
-import {resolveActiveScope, SymbolScope} from "./symbolScope";
+import {tryResolveActiveScope, SymbolScope} from "./symbolScope";
 import {TokenObject} from "../compiler_tokenizer/tokenObject";
 import {ResolvedType} from "./resolvedType";
 import {TokenRange} from "../compiler_tokenizer/tokenRange";
@@ -215,8 +215,8 @@ function checkLhsOverloadedOperatorCall(args: LhsOperatorCallArgs): ResolvedType
         return {reason: MismatchKind.MissingAliasOperator};
     }
 
-    const aliasFunction =
-        resolveActiveScope(lhs.scopePath).lookupScope(lhs.identifierText)?.lookupSymbol(alias);
+    const lhsScope = tryResolveActiveScope(lhs.scopePath);
+    const aliasFunction = lhsScope?.lookupScope(lhs.identifierText)?.lookupSymbol(alias);
     if (aliasFunction === undefined) {
         return {reason: MismatchKind.MissingAliasOperator};
     } else if (aliasFunction.isFunctionHolder() === false) {

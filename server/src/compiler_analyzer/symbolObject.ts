@@ -166,6 +166,10 @@ export class SymbolType extends SymbolBase implements SymbolHolder {
         this._baseList = baseList;
     }
 
+    public replaceBaseList(baseList: (ResolvedType | undefined)[] | undefined) {
+        this._baseList = baseList;
+    }
+
     // public mutate(): Mutable<this> {
     //     return this;
     // }

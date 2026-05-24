@@ -81,6 +81,8 @@ function normalizeFileUri(uri: string) {
 }
 
 export function resolveIncludeUri(baseUri: string, relativeOrAbsolute: string): string {
+    relativeOrAbsolute = relativeOrAbsolute.replace(/\\+/g, '/');
+
     if (path.isAbsolute(relativeOrAbsolute)) {
         return normalizeFileUri(url.pathToFileURL(relativeOrAbsolute).toString());
     }

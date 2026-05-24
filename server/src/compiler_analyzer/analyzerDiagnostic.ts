@@ -5,16 +5,20 @@ import {ActionHint} from "./actionHint";
 
 const sourceName = 'AngelScript - Analyzer';
 
-const s_diagnostics: lsp.Diagnostic[] = [];
+const s_sessionStack: lsp.Diagnostic[][] = [];
 
 function beginSession() {
-    s_diagnostics.length = 0;
+    s_sessionStack.push([]);
 }
 
 function error(location: TextLocation, message: string) {
     const severity = getGlobalSettings().suppressAnalyzerErrors ? lsp.DiagnosticSeverity.Warning : lsp.DiagnosticSeverity.Error;
+    const currentSession = s_sessionStack.at(-1);
+    if (currentSession === undefined) {
+        throw new Error("analyzerDiagnostic.error() called without active session");
+    }
 
-    s_diagnostics.push({
+    currentSession.push({
         severity: severity,
         range: location.clone(),
         message: message,
@@ -23,7 +27,12 @@ function error(location: TextLocation, message: string) {
 }
 
 function hint(location: TextLocation, hint: ActionHint, message: string) {
-    s_diagnostics.push({
+    const currentSession = s_sessionStack.at(-1);
+    if (currentSession === undefined) {
+        throw new Error("analyzerDiagnostic.hint() called without active session");
+    }
+
+    currentSession.push({
         severity: lsp.DiagnosticSeverity.Hint,
         range: location.clone(),
         message: message,
@@ -33,9 +42,7 @@ function hint(location: TextLocation, hint: ActionHint, message: string) {
 }
 
 function endSession(): lsp.Diagnostic[] {
-    const result = s_diagnostics.slice();
-    s_diagnostics.length = 0;
-    return result;
+    return s_sessionStack.pop() ?? [];
 }
 
 export const analyzerDiagnostic = {

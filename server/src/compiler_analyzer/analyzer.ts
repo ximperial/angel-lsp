@@ -58,7 +58,8 @@ import {
     getActiveGlobalScope,
     resolveActiveScope,
     SymbolGlobalScope,
-    SymbolScope
+    SymbolScope,
+    tryResolveActiveScope
 } from "./symbolScope";
 import {checkFunctionCall} from "./functionCall";
 import {checkTypeCast, assertTypeCast} from "./typeCast";
@@ -978,9 +979,15 @@ function analyzeExprPostOp1(scope: SymbolScope, exprPostOp: NodeExprPostOp1, exp
     const classScope = exprValue.typeOrFunc.membersScopePath;
     if (classScope === undefined) return undefined;
 
+    const resolvedClassScope = tryResolveActiveScope(classScope);
+    if (resolvedClassScope === undefined) {
+        analyzerDiagnostic.error(identifier.location, `Type '${exprValue.typeOrFunc.identifierText}' members are not available.`);
+        return undefined;
+    }
+
     if (isMemberMethod) {
         // Analyze method call.
-        const instanceMember = resolveActiveScope(classScope).lookupSymbol(identifier.text);
+        const instanceMember = resolvedClassScope.lookupSymbol(identifier.text);
         if (instanceMember === undefined) {
             analyzerDiagnostic.error(identifier.location, `'${identifier.text}' is not defined.`);
             return undefined;
@@ -1022,7 +1029,7 @@ function analyzeExprPostOp1(scope: SymbolScope, exprPostOp: NodeExprPostOp1, exp
         return undefined;
     } else {
         // Analyze field access.
-        const fieldType = analyzeVariableAccess(scope, resolveActiveScope(classScope), identifier);
+        const fieldType = analyzeVariableAccess(scope, resolvedClassScope, identifier);
         return applyTemplateTranslator(fieldType, exprValue.templateTranslator);
     }
 }
@@ -1185,7 +1192,8 @@ function analyzeOpCallCaller(scope: SymbolScope, funcCall: NodeFuncCall, calleeV
         return;
     }
 
-    const classScope = resolveActiveScope(varType.scopePath).lookupScope(varType.typeOrFunc.identifierText);
+    const activeTypeScope = tryResolveActiveScope(varType.scopePath);
+    const classScope = activeTypeScope?.lookupScope(varType.typeOrFunc.identifierText);
     if (classScope === undefined) return undefined;
 
     const opCall = classScope.lookupSymbol('opCall');

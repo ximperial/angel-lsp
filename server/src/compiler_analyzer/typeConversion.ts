@@ -1,5 +1,5 @@
 import {ResolvedType} from "./resolvedType";
-import {getActiveGlobalScope, resolveActiveScope} from "./symbolScope";
+import {getActiveGlobalScope, tryResolveActiveScope} from "./symbolScope";
 import {isNodeClassOrInterface, SymbolFunction, SymbolType} from "./symbolObject";
 import {NodeName} from "../compiler_parser/nodes";
 import {resolvedBuiltinInt, resolvedBuiltinUInt} from "./builtinType";
@@ -108,6 +108,18 @@ function evaluateTypeConversionInternal(
             return {cost: ConversionCost.RefConv};
         }
 
+        // Check if the niltype class (from as.predefined) has an opImplConv that returns dest.
+        // This handles types like `buff` that are handle-like but don't extend `handle` directly.
+        if (destTypeOrFunc.isType()) {
+            const niltypeScope = getActiveGlobalScope().lookupScope('niltype');
+            const opImplConvHolder = niltypeScope?.lookupSymbol('opImplConv');
+            for (const func of opImplConvHolder?.toList() ?? []) {
+                if (func.isFunction() && func.returnType?.typeOrFunc.equals(destTypeOrFunc)) {
+                    return {cost: ConversionCost.RefConv};
+                }
+            }
+        }
+
         return undefined;
     }
 
@@ -133,6 +145,11 @@ function evaluateTypeConversionInternal(
     const destType: SymbolType = destTypeOrFunc; // <-- destTypeOrFunc is guaranteed to be a type here
 
     if (srcTypeOrFunc.isFunction()) {
+        if (destType.identifierText === 'code') {
+            const srcOverloadList = collectFunctionOverloads(srcTypeOrFunc);
+            return {cost: ConversionCost.RefConv, resolvedOverload: srcOverloadList[0]};
+        }
+
         return undefined;
     }
 
@@ -273,7 +290,9 @@ function evaluateConvObjectToPrimitive(src: ResolvedType, dest: ResolvedType): C
     assert(srcType.isType() && destType.isType());
     assert((srcType.isPrimitiveOrEnum() === false || destType.isPrimitiveOrEnum()));
 
-    // FIXME: An explicit handle cannot be converted to a primitive
+    if (isWarcraftHandleType(srcType) && destType.isNumberType()) {
+        return {cost: ConversionCost.ObjToPrimitiveConv};
+    }
 
     // FIXME: Consider ConversionType
     const convFuncList = collectOpConvFunctions(srcType);
@@ -348,8 +367,8 @@ function evaluateConvObjectToObject(
     assert(srcType.isType() && destType.isType());
     assert(srcType.isPrimitiveOrEnum() === false && destType.isPrimitiveOrEnum() === false);
 
-    // Check if these are identical
-    if (src.identifierToken?.equals(dest.identifierToken)) return {cost: ConversionCost.NoConv};
+    // Check if these are identical types.
+    if (srcType.equals(destType)) return {cost: ConversionCost.NoConv};
 
     // FIXME?
     if (canDownCast(srcType, destType)) return {cost: ConversionCost.ToObjectConv};
@@ -397,7 +416,10 @@ function evaluateConversionByConstructor(
 
     assert(srcType.isType() && destType.isType());
 
-    const destScope = resolveActiveScope(destType.scopePath);
+    const destScope = tryResolveActiveScope(destType.scopePath);
+    if (destScope === undefined) {
+        return undefined;
+    }
 
     // Search for the constructor of the given type from the scope to which the given type belongs.
     const constructorScope = destScope.lookupScope(destType.identifierText);
@@ -535,8 +557,9 @@ function collectOpConvFunctions(srcType: SymbolType | SymbolFunction) {
     // TODO: Consider implicit or explicit
 
     const convFuncList: SymbolFunction[ ] = [];
+    const srcScope = tryResolveActiveScope(srcType.scopePath);
     const srcMembers =
-        resolveActiveScope(srcType.scopePath).lookupScope(srcType.identifierText)?.symbolTable.values() ?? [];
+        srcScope?.lookupScope(srcType.identifierText)?.symbolTable.values() ?? [];
     for (const methodHolder of srcMembers) {
         if (methodHolder.isFunctionHolder() &&
             ['opConv', 'opImplConv',

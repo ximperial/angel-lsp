@@ -1,5 +1,5 @@
 import {ResolvedType} from "./resolvedType";
-import {getActiveGlobalScope, resolveActiveScope} from "./symbolScope";
+import {getActiveGlobalScope, tryResolveActiveScope} from "./symbolScope";
 import {TokenRange} from "../compiler_tokenizer/tokenRange";
 import {ConversionEvaluation} from "./typeConversion";
 
@@ -22,7 +22,8 @@ export function causeTypeConversionSideEffect(
 
     // Resolved the type of the ambiguous enum member
     if (src.typeOrFunc.isType() && src.typeOrFunc.multipleEnumCandidates !== undefined) {
-        const enumScope = resolveActiveScope(dest.scopePath ?? []).lookupScope(dest.identifierText);
+        const enumParentScope = tryResolveActiveScope(dest.scopePath ?? []);
+        const enumScope = enumParentScope?.lookupScope(dest.identifierText);
         const enumMember = enumScope?.lookupSymbol(src.typeOrFunc.identifierText);
         if (enumMember?.isVariable()) {
             getActiveGlobalScope().pushReference({

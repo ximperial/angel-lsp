@@ -177,9 +177,8 @@ function hoistClass(
         if (templateTypes.length > 0) symbol.assignTemplateTypes(templateTypes);
     }
 
-    symbol.assignBaseList(hoistBaseList(scope, nodeClass));
-
     hoistQueue.push(() => {
+        symbol.assignBaseList(hoistBaseList(scope, nodeClass));
         hoistClassMembers(scope, nodeClass, analyzeQueue, hoistQueue);
 
         hoistQueue.push(() => {
@@ -237,7 +236,11 @@ function hoistClassTemplateTypes(scope: SymbolScope, types: NodeType[] | undefin
     return templateTypes;
 }
 
-function hoistBaseList(scope: SymbolScope, nodeClass: NodeClass | NodeInterface): (ResolvedType | undefined)[] | undefined {
+function hoistBaseList(
+    scope: SymbolScope,
+    nodeClass: NodeClass | NodeInterface,
+    outputError = true
+): (ResolvedType | undefined)[] | undefined {
     if (nodeClass.baseList.length === 0) return undefined;
 
     const baseList: (ResolvedType | undefined)[] = [];
@@ -251,13 +254,17 @@ function hoistBaseList(scope: SymbolScope, nodeClass: NodeClass | NodeInterface)
             continue;
         }
 
-        const baseType = baseScope.lookupSymbolWithParent(baseIdentifier.text);
+        const baseType = resolveBaseTypeSymbol(baseScope, baseIdentifier.text);
 
         if (baseType === undefined) {
-            analyzerDiagnostic.error(baseIdentifier.location, `'${baseIdentifier.text}' is not defined type`);
+            if (outputError) {
+                analyzerDiagnostic.error(baseIdentifier.location, `'${baseIdentifier.text}' is not defined type`);
+            }
             baseList.push(undefined);
         } else if (baseType.isType() === false) {
-            analyzerDiagnostic.error(baseIdentifier.location, `'${baseIdentifier.text}' is not class or interface`);
+            if (outputError) {
+                analyzerDiagnostic.error(baseIdentifier.location, `'${baseIdentifier.text}' is not class or interface`);
+            }
             baseList.push(undefined);
         } else {
             // Found the base class
@@ -270,6 +277,67 @@ function hoistBaseList(scope: SymbolScope, nodeClass: NodeClass | NodeInterface)
         }
     }
     return baseList;
+}
+
+function resolveBaseTypeSymbol(scope: SymbolScope, identifier: string) {
+    let scopeIterator: SymbolScope | undefined = scope;
+    while (scopeIterator !== undefined) {
+        const found = scopeIterator.lookupSymbol(identifier);
+        if (found === undefined) {
+            const syntheticType = tryResolveTypeFromScope(scopeIterator, identifier);
+            if (syntheticType !== undefined) {
+                return syntheticType;
+            }
+            scopeIterator = scopeIterator.parentScope;
+            continue;
+        }
+
+        if (found.isType()) {
+            return found;
+        }
+
+        if (found.isFunctionHolder() &&
+            found.first.linkedNode.nodeName === NodeName.Func &&
+            isFuncHeadReturnValue(found.first.linkedNode.head) === false
+        ) {
+            // Constructor/destructor holders can shadow the class symbol during parent traversal.
+            scopeIterator = scopeIterator.parentScope;
+            continue;
+        }
+
+        const syntheticType = tryResolveTypeFromScope(scopeIterator, identifier);
+        if (syntheticType !== undefined) {
+            return syntheticType;
+        }
+
+        return found;
+    }
+
+    return undefined;
+}
+
+function tryResolveTypeFromScope(scope: SymbolScope, identifier: string): SymbolType | undefined {
+    const typeScope = scope.lookupScope(identifier) ?? scope.lookupScopeWithParent(identifier);
+    if (typeScope === undefined) {
+        return undefined;
+    }
+
+    const linkedNode = typeScope?.linkedNode;
+    if (linkedNode?.nodeName !== NodeName.Class && linkedNode?.nodeName !== NodeName.Interface) {
+        return undefined;
+    }
+
+    const parentScope = typeScope.parentScope;
+    if (parentScope === undefined) {
+        return undefined;
+    }
+
+    return SymbolType.create({
+        identifierToken: linkedNode.identifier,
+        scopePath: parentScope.scopePath,
+        linkedNode: linkedNode,
+        membersScopePath: typeScope.scopePath,
+    });
 }
 
 function copyBaseMembers(scope: SymbolScope, baseList: (ResolvedType | undefined)[], outputError = true) {
@@ -445,12 +513,12 @@ function hoistInterface(parentScope: SymbolScope, nodeInterface: NodeInterface, 
     const scope: SymbolScope = parentScope.insertScopeAndCheck(nodeInterface.identifier, nodeInterface);
     symbol.assignMembersScopePath(scope.scopePath);
 
-    const baseList = hoistBaseList(scope, nodeInterface);
-    if (baseList !== undefined) symbol.assignBaseList(baseList);
-
     hoistQueue.push(() => {
+        const baseList = hoistBaseList(scope, nodeInterface);
+        if (baseList !== undefined) symbol.assignBaseList(baseList);
+
         hoistInterfaceMembers(scope, nodeInterface, analyzeQueue, hoistQueue);
-        if (baseList !== undefined) copyBaseMembers(scope, baseList);
+        if (symbol.baseList !== undefined) copyBaseMembers(scope, symbol.baseList);
     });
 
     pushScopeRegionInfo(scope, nodeInterface.nodeRange);
@@ -681,12 +749,29 @@ function collectBaseClassesAndDeivedClasses(scope: SymbolScope, baseClassSet: Se
     }
 }
 
+function refreshBaseListWithCurrentScope(globalScope: SymbolGlobalScope, symbol: SymbolType) {
+    const linkedNode = symbol.linkedNode;
+    if (linkedNode === undefined) return;
+    if (linkedNode.nodeName !== NodeName.Class && linkedNode.nodeName !== NodeName.Interface) return;
+    if (linkedNode.baseList.length === 0) return;
+
+    const parentScope = globalScope.resolveScope(symbol.scopePath);
+    if (parentScope === undefined) return;
+
+    const typeScope = globalScope.resolveScope(symbol.membersScopePath ?? []);
+    const scopeForBaseLookup = typeScope ?? parentScope;
+    symbol.replaceBaseList(hoistBaseList(scopeForBaseLookup, linkedNode, false));
+}
+
 function applyInheritanceBeforeHoist(globalScope: SymbolGlobalScope) {
     const resolvedClassSet: Set<string> = new Set();
 
     let unresolvedDerivedClassList: SymbolType[] = [];
 
     collectBaseClassesAndDeivedClasses(globalScope, resolvedClassSet, unresolvedDerivedClassList);
+    for (const derivedClass of unresolvedDerivedClassList) {
+        refreshBaseListWithCurrentScope(globalScope, derivedClass);
+    }
 
     // FIXME: Optimize?
     let nextList: SymbolType[] = [];
@@ -747,6 +832,11 @@ export function hoistAfterParsed(ast: NodeScript, globalScope: SymbolGlobalScope
         const next = hoistQueue.shift();
         if (next !== undefined) next();
     }
+
+    // Run one more inheritance consolidation pass after local hoisting so
+    // symbols declared later in the current script are visible to earlier
+    // derived types and mixed include/local graphs remain order-tolerant.
+    applyInheritanceBeforeHoist(globalScope);
 
     return {globalScope, analyzeQueue};
 }
