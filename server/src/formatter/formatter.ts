@@ -13,7 +13,7 @@ import {
     NodeExprStat,
     NodeExprTerm,
     NodeExprValue,
-    NodeFor,
+    NodeFor, NodeForEach,
     NodeFunc, NodeFuncCall, NodeFuncDef,
     NodeIf, NodeImport,
     NodeInitList, NodeInterface, NodeIntfMethod,
@@ -161,9 +161,26 @@ function formatClass(format: FormatterState, nodeClass: NodeClass) {
 
     formatTargetBy(format, nodeClass.identifier.text, {});
 
+    if (nodeClass.typeTemplates !== undefined) {
+        formatTypeTemplates(format, nodeClass.typeTemplates);
+    }
+
     if (formatMoveToNonComment(format)?.text === ';') {
         formatTargetBy(format, ';', {condenseLeft: true, connectTail: true});
     } else {
+        // [':' SCOPE IDENTIFIER {',' SCOPE IDENTIFIER}]
+        if (nodeClass.baseList.length > 0) {
+            formatTargetBy(format, ':', {});
+
+            for (let i = 0; i < nodeClass.baseList.length; i++) {
+                if (i > 0) formatTargetBy(format, ',', {condenseLeft: true});
+
+                const base = nodeClass.baseList[i];
+                if (base.scope !== undefined) formatScope(format, base.scope);
+                if (base.identifier !== undefined) formatTargetBy(format, base.identifier.text, {});
+            }
+        }
+
         formatBraceBlock(format, () => {
             for (const node of nodeClass.memberList) {
                 if (node.nodeName === NodeName.VirtualProp) {
@@ -606,6 +623,9 @@ function formatStatement(format: FormatterState, statement: NodeStatement, canIn
     case NodeName.For:
         formatFor(format, statement);
         break;
+    case NodeName.ForEach:
+        formatForEach(format, statement);
+        break;
     case NodeName.While:
         formatWhile(format, statement);
         break;
@@ -685,6 +705,29 @@ function formatFor(format: FormatterState, nodeFor: NodeFor) {
     }, false);
 
     if (nodeFor.statement !== undefined) formatStatement(format, nodeFor.statement, true);
+}
+
+// BNF: FOREACH       ::= 'foreach' '(' TYPE IDENTIFIER {',' TYPE INDENTIFIER} ':' ASSIGN ')' STATEMENT
+function formatForEach(format: FormatterState, nodeForEach: NodeForEach) {
+    formatMoveUntilNodeStart(format, nodeForEach);
+
+    formatTargetBy(format, 'foreach', {});
+
+    formatParenthesesBlock(format, () => {
+        for (let i = 0; i < nodeForEach.variables.length; i++) {
+            if (i > 0) formatTargetBy(format, ',', {condenseLeft: true});
+
+            const variable = nodeForEach.variables[i];
+            formatType(format, variable.type);
+            formatTargetBy(format, variable.identifier.text, {});
+        }
+
+        formatTargetBy(format, ':', {});
+
+        if (nodeForEach.assign !== undefined) formatAssign(format, nodeForEach.assign);
+    }, false);
+
+    if (nodeForEach.statement !== undefined) formatStatement(format, nodeForEach.statement, true);
 }
 
 // BNF: WHILE         ::= 'while' '(' ASSIGN ')' STATEMENT
