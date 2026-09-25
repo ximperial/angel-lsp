@@ -4,3 +4,6 @@ client/server
 .vscode-test
 tsconfig.tsbuildinfo
 server/angelscript-language-server.js
+.venv/
+*.vsix
+.claude/settings.local.json
