@@ -1,24 +1,25 @@
-import {HighlightForModifier, HighlightForToken} from "../core/highlight";
-import {findAllReservedWordProperty, ReservedWordProperty} from "./reservedWord";
-import {TextLocation} from "./textLocation";
-import {TokenRange} from "./tokenRange";
-import assert = require("node:assert");
+import {TokenHighlightModifier, TokenHighlight} from '../core/highlight';
+import {findAllReservedWordProperty, ReservedWordProperty} from './reservedWord';
+import {TextLocation} from './textLocation';
+import {TokenRange} from './tokenRange';
+import assert = require('node:assert');
+import {normalizeHeredocStringContent} from './stringUtils';
 
 /**
- * Tokenizer categorizes tokens into the following kinds.
- * Unknown tokens such as non-alphanumeric characters are removed during the tokenization phase.
+ * The tokenizer classifies tokens into the following kinds.
+ * Unknown tokens, such as unsupported non-alphanumeric characters, are removed during tokenization.
  */
 export enum TokenKind {
     Reserved = 'Reserved',
     Identifier = 'Identifier',
     Number = 'Number',
     String = 'String',
-    Comment = 'Comment',
+    Comment = 'Comment'
 }
 
 interface HighlightInfo {
-    token: HighlightForToken;
-    modifier: HighlightForModifier;
+    tokenHighlight: TokenHighlight;
+    modifier: TokenHighlightModifier;
 }
 
 const emptyLocation = TextLocation.createEmpty();
@@ -26,34 +27,34 @@ const emptyLocation = TextLocation.createEmpty();
 /**
  * Base object for all tokens.
  */
-export abstract class TokenBase {
-    // Location information of a token including the file path and the position within the file.
+export abstract class TokenObject {
+    // Token location, including the file path and the position within the file.
     private readonly _location: TextLocation | undefined;
 
-    // Syntax highlight information
+    // Syntax highlighting information.
     private _highlight: HighlightInfo;
 
-    // Raw token information are set by the tokenizer.
+    // Raw-token links assigned by the tokenizer.
     private _prevRawToken: TokenObject | undefined = undefined;
     private _nextRawToken: TokenObject | undefined = undefined;
 
-    // Preprocessed token information are set by the preprocessor.
+    // Preprocessed-token links assigned by the preprocessor.
     private _indexInPreprocessedTokenList: number = -1;
     private _prevPreprocessedToken: TokenObject | undefined = undefined;
     private _nextPreprocessedToken: TokenObject | undefined = undefined;
 
-    // Information about the token range covered by this virtual token
+    // Range covered by this virtual token.
     private readonly _coveredRange: TokenRange | undefined = undefined;
 
     protected constructor(
-        // The text content of a token as it is in principle. (Note that a combined multi-string token is modified.)
+        // Raw token text. Combined string tokens are an exception and may be rewritten.
         public readonly text: string,
-        // The location information of a token. If this is a virtual token, it can specify the range it covers.
+        // Token location. Virtual tokens may instead provide the covered range.
         location: TextLocation | TokenRange | undefined,
-        // Initial highlight information for the token type
-        highlightToken: HighlightForToken,
-        // Initial highlight information for the token modifier
-        highlightModifier: HighlightForModifier = HighlightForModifier.Nothing,
+        // Initial highlight information for the token type.
+        tokeHighlight: TokenHighlight,
+        // Initial highlight information for the token modifier.
+        tokeHighlightModifier: TokenHighlightModifier = TokenHighlightModifier.Nothing
     ) {
         if (location instanceof TextLocation) {
             this._location = location;
@@ -61,23 +62,21 @@ export abstract class TokenBase {
             this._coveredRange = location;
         }
 
-        this._highlight = {token: highlightToken, modifier: highlightModifier};
+        this._highlight = {tokenHighlight: tokeHighlight, modifier: tokeHighlightModifier};
     }
 
     public abstract get kind(): TokenKind;
 
     public get location(): TextLocation {
-        return this._location
-            ?? this._coveredRange?.getBoundingLocation()
-            ?? emptyLocation;
+        return this._location ?? this._coveredRange?.getBoundingLocation() ?? emptyLocation;
     }
 
-    public setHighlight(token: HighlightForToken, modifier?: HighlightForModifier) {
+    public setHighlight(tokenHighlight: TokenHighlight, modifier?: TokenHighlightModifier) {
         assert(this.isVirtual() === false);
         if (modifier === undefined) {
-            this._highlight.token = token;
+            this._highlight.tokenHighlight = tokenHighlight;
         } else {
-            this._highlight = {token: token, modifier: modifier};
+            this._highlight = {tokenHighlight: tokenHighlight, modifier: modifier};
         }
     }
 
@@ -92,31 +91,39 @@ export abstract class TokenBase {
         return this._location === undefined;
     }
 
-    public isReservedToken(): this is TokenReserved {
+    public isReservedToken(): this is ReservedToken {
         return this.kind === TokenKind.Reserved;
     }
 
-    public isNumberToken(): this is TokenNumber {
+    public isIdentifierToken(): this is IdentifierToken {
+        return this.kind === TokenKind.Identifier;
+    }
+
+    public isNumberToken(): this is NumberToken {
         return this.kind === TokenKind.Number;
     }
 
-    public isStringToken(): this is TokenString {
+    public isStringToken(): this is StringToken {
         return this.kind === TokenKind.String;
     }
 
-    public isCommentToken(): this is TokenComment {
+    public isCommentToken(): this is CommentToken {
         return this.kind === TokenKind.Comment;
     }
 
     public bindRawToken(next: TokenObject | undefined) {
         this._nextRawToken = next;
-        if (next !== undefined) next._prevRawToken = this;
+        if (next !== undefined) {
+            next._prevRawToken = this;
+        }
     }
 
     public bindPreprocessedToken(index: number, next: TokenObject | undefined) {
         this._indexInPreprocessedTokenList = index;
         this._nextPreprocessedToken = next;
-        if (next !== undefined) next._prevPreprocessedToken = this;
+        if (next !== undefined) {
+            next._prevPreprocessedToken = this;
+        }
     }
 
     /**
@@ -155,8 +162,8 @@ export abstract class TokenBase {
     }
 
     /**
-     * Information on the token range this token covered.
-     * It is basically set for virtual tokens.
+     * Return the token range covered by this token.
+     * This is usually set only for virtual tokens.
      */
     public get coveredRange(): TokenRange | undefined {
         return this._coveredRange;
@@ -169,47 +176,43 @@ export abstract class TokenBase {
         return this.next ?? this;
     }
 
-    public equals(other: TokenBase | undefined): boolean {
-        if (other === undefined) return false;
-        return this === other || (this.location.equals(other.location));
+    public equals(other: TokenObject | undefined): boolean {
+        if (other === undefined) {
+            return false;
+        }
+
+        return this === other || this.location.equals(other.location);
     }
 }
 
-export class TokenReserved extends TokenBase {
+export class ReservedToken extends TokenObject {
     public readonly property: ReservedWordProperty;
 
-    public constructor(
-        text: string,
-        location: TextLocation | TokenRange | undefined,
-        property?: ReservedWordProperty,
-    ) {
-        super(text, location, HighlightForToken.Keyword);
+    public constructor(text: string, location: TextLocation | TokenRange | undefined, property?: ReservedWordProperty) {
+        super(text, location, TokenHighlight.Keyword);
 
         this.property = property ?? findAllReservedWordProperty(text);
     }
 
-    public static createVirtual(text: string, coveredRange?: TokenRange): TokenReserved {
-        return new TokenReserved(text, coveredRange);
+    public static createVirtual(text: string, coveredRange?: TokenRange): ReservedToken {
+        return new ReservedToken(text, coveredRange);
     }
 
-    public get kind(): TokenKind {
+    public get kind(): TokenKind.Reserved {
         return TokenKind.Reserved;
     }
 }
 
-export class TokenIdentifier extends TokenBase {
-    public constructor(
-        text: string,
-        location: TextLocation | TokenRange | undefined,
-    ) {
-        super(text, location, HighlightForToken.Variable);
+export class IdentifierToken extends TokenObject {
+    public constructor(text: string, location: TextLocation | TokenRange | undefined) {
+        super(text, location, TokenHighlight.Variable);
     }
 
-    public static createVirtual(text: string, coveredRange?: TokenRange): TokenIdentifier {
-        return new TokenIdentifier(text, coveredRange);
+    public static createVirtual(text: string, coveredRange?: TokenRange): IdentifierToken {
+        return new IdentifierToken(text, coveredRange);
     }
 
-    public get kind(): TokenKind {
+    public get kind(): TokenKind.Identifier {
         return TokenKind.Identifier;
     }
 }
@@ -217,58 +220,58 @@ export class TokenIdentifier extends TokenBase {
 export enum NumberLiteral {
     Integer = 'Integer',
     Float = 'Float',
-    Double = 'Double',
+    Double = 'Double'
 }
 
-export class TokenNumber extends TokenBase {
+export class NumberToken extends TokenObject {
     public constructor(
         text: string,
         location: TextLocation,
-        public readonly numberLiteral: NumberLiteral,
+        public readonly numberLiteral: NumberLiteral
     ) {
-        super(text, location, HighlightForToken.Number);
+        super(text, location, TokenHighlight.Number);
     }
 
-    public get kind(): TokenKind {
+    public get kind(): TokenKind.Number {
         return TokenKind.Number;
+    }
+
+    public getNumberValue(): number | undefined {
+        const suffixPattern = this.numberLiteral === NumberLiteral.Integer ? /[uUlL]+$/ : /[fFdD]+$/;
+        const normalized = this.text.replace(/'/g, '').replace(suffixPattern, '');
+        const value = /^0[dD]/.test(normalized) ? Number(normalized.slice(2)) : Number(normalized);
+        return Number.isNaN(value) ? undefined : value;
     }
 }
 
-export class TokenString extends TokenBase {
-    public constructor(
-        text: string,
-        location: TextLocation | TokenRange | undefined,
-    ) {
-        super(text, location, HighlightForToken.String);
+export class StringToken extends TokenObject {
+    public constructor(text: string, location: TextLocation | TokenRange | undefined) {
+        super(text, location, TokenHighlight.String);
     }
 
-    public static createVirtual(text: string, coveredRange?: TokenRange): TokenString {
-        return new TokenString(text, coveredRange);
+    public static createVirtual(text: string, coveredRange?: TokenRange): StringToken {
+        return new StringToken(text, coveredRange);
     }
 
-    public get kind(): TokenKind {
+    public get kind(): TokenKind.String {
         return TokenKind.String;
     }
 
     public getStringContent(): string {
-        return this.text.startsWith('"""') ? this.text.slice(3, -3) : this.text.slice(1, -1);
+        if (this.text.startsWith('"""')) {
+            return normalizeHeredocStringContent(this.text.slice(3, -3));
+        }
+
+        return this.text.slice(1, -1);
     }
 }
 
-export class TokenComment extends TokenBase {
-    public constructor(
-        text: string,
-        location: TextLocation,
-    ) {
-        super(text, location, HighlightForToken.Comment);
+export class CommentToken extends TokenObject {
+    public constructor(text: string, location: TextLocation) {
+        super(text, location, TokenHighlight.Comment);
     }
 
-    public get kind(): TokenKind {
+    public get kind(): TokenKind.Comment {
         return TokenKind.Comment;
     }
 }
-
-/**
- * TokenObject is a union type of all token types.
- */
-export type TokenObject = TokenReserved | TokenIdentifier | TokenNumber | TokenString | TokenComment

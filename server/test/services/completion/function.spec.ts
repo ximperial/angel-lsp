@@ -1,17 +1,23 @@
-import {testCompletion} from "./utils";
+import {testCompletion, useCompletionWithoutBuiltinKeywords} from './utils';
 
 describe('completion/function', () => {
-    testCompletion(`// Basic function completion
-        void foo() { 
-            int x = 1; 
-        }
-        
-        void bar() {
-            int y = 1;
-            while (y < 10) {
-                $C0$
+    useCompletionWithoutBuiltinKeywords();
+
+    it('completes functions and locals in a statement block', () => {
+        testCompletion(
+            `// Basic function completion
+            void foo() {
+                int x = 1;
             }
-        }    
-        `, ["foo", "bar", "y"]
-    );
+
+            void bar() {
+                int y = 1;
+                while (y < 10) {
+                    $C0$
+                }
+            }
+            `,
+            ['foo', 'bar', 'y']
+        );
+    });
 });

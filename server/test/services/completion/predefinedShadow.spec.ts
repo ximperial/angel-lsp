@@ -1,6 +1,6 @@
-import {provideCompletion} from "../../../src/services/completion";
-import {inspectFileContents, makeFileContentList} from "../../inspectorUtils";
-import {CaretMap} from "../caretMap";
+import {provideCompletion} from '../../../src/services/completion';
+import {inspectFileContents, makeFileContentList} from '../../inspectorUtils';
+import {CaretMap} from '../caretMap';
 
 describe('completion/predefinedShadow', () => {
     it('prefers project symbols over predefined symbols for duplicate labels', () => {
@@ -32,10 +32,16 @@ describe('completion/predefinedShadow', () => {
 
         const inspector = inspectFileContents(fileContentList);
         const target = caretMap.get(0);
-        const globalScope = inspector.getRecord(target.uri).analyzerScope.globalScope;
+        const record = inspector.getRecord(target.uri);
 
-        const completions = provideCompletion(globalScope, target.position)
-            .filter(item => item.item.label === 'UnitData');
+        const completions = provideCompletion(
+            record.rawTokens,
+            record.preprocessedOutput.preprocessedTokens,
+            record.preprocessedOutput.definedSymbols,
+            record.ast,
+            record.analyzerScope.globalScope,
+            target.position
+        ).filter(item => item.item.label === 'UnitData');
 
         if (completions.length !== 1) {
             throw new Error(`Expected one UnitData completion, but got ${completions.length}`);

@@ -1,30 +1,31 @@
-import {SymbolFunction} from "../compiler_analyzer/symbolObject";
-import {Position, SignatureHelp, URI} from "vscode-languageserver";
-import {ParameterInformation, SignatureInformation} from "vscode-languageserver-types";
-import {FunctionCallInfo} from "../compiler_analyzer/info";
-import {stringifyResolvedType} from "../compiler_analyzer/symbolUtils";
-import {SymbolGlobalScope, SymbolScope} from "../compiler_analyzer/symbolScope";
-import {TextPosition} from "../compiler_tokenizer/textLocation";
-import {applyTemplateTranslator} from "../compiler_analyzer/resolvedType";
-import {getDocumentCommentOfSymbol} from "./utils";
+import {FunctionSymbol} from '../compiler_analyzer/symbolObject';
+import {Position, SignatureHelp, URI} from 'vscode-languageserver';
+import {ParameterInformation, SignatureInformation} from 'vscode-languageserver-types';
+import {FunctionCallMarker} from '../compiler_analyzer/marker';
+import {SymbolGlobalScope, SymbolScope} from '../compiler_analyzer/symbolScope';
+import {TextPosition} from '../compiler_tokenizer/textLocation';
+import {applyTemplateMapping} from '../compiler_analyzer/resolvedType';
+import {getDocumentCommentOfSymbol} from './utils';
+import {stringifyResolvedType} from '../compiler_analyzer/symbolStringifier';
 
-export function provideSignatureHelp(
-    globalScope: SymbolGlobalScope, caret: Position, uri: URI
-): SignatureHelp {
+export function provideSignatureHelp(globalScope: SymbolGlobalScope, caret: Position, uri: URI): SignatureHelp {
     const signatures: SignatureInformation[] = [];
 
     // Since the nesting is deeper toward the end, iterate from the back.
-    for (let i = globalScope.info.functionCall.length - 1; i >= 0; i--) {
-        const info = globalScope.info.functionCall[i];
+    for (let i = globalScope.markers.functionCall.length - 1; i >= 0; i--) {
+        const info = globalScope.markers.functionCall[i];
 
         // Check if the caller location is at the cursor position in the scope.
         const shouldExtend = info.callerArgumentsNode.nodeRange.end.text == ','; // ',' indicates that user is still typing.
         const location = info.callerArgumentsNode.nodeRange.extendForward(shouldExtend ? 1 : 0); // Extend to the next token of ')'
         if (location.getBoundingLocation().positionInRange(caret)) {
-            const callee = getPreferredFunction(info.calleeFuncHolder.overloadList);
-            const expectedCallee =
-                globalScope.resolveScope(callee.scopePath)?.lookupSymbolWithParent(callee.actualIdentifierToken.text);
-            if (!expectedCallee?.isFunctionHolder()) continue;
+            const callee = sortFunctionsByPriority(info.calleeFuncHolder.overloadList)[0];
+            const expectedCallee = globalScope
+                .resolveScope(callee.scopePath)
+                ?.lookupSymbolWithParent(callee.actualIdentifierToken.text);
+            if (!expectedCallee?.isFunctionHolder()) {
+                continue;
+            }
 
             for (const callee of sortFunctionsByPriority(expectedCallee.overloadList)) {
                 signatures.push(getFunctionSignature(info, callee, new TextPosition(caret.line, caret.character)));
@@ -35,32 +36,40 @@ export function provideSignatureHelp(
     }
 
     return {
-        signatures: signatures,
+        signatures: signatures
         // activeSignature: 0,
     };
 }
 
-function getFunctionSignature(info: FunctionCallInfo, expectedCallee: SymbolFunction, caret: TextPosition) {
+function getFunctionSignature(info: FunctionCallMarker, expectedCallee: FunctionSymbol, caret: TextPosition) {
     const parameters: ParameterInformation[] = [];
 
     let activeIndex = 0;
 
-    let signatureLabel = expectedCallee.linkedNode.identifier.text + '(';
-    for (let i = 0; i < expectedCallee.linkedNode.paramList.length; i++) {
-        const paramIdentifier = expectedCallee.linkedNode.paramList[i];
+    let signatureLabel = expectedCallee.actualIdentifierToken.text + '(';
+    for (let i = 0; i < expectedCallee.linkedNode.paramList.params.length; i++) {
+        const paramIdentifier = expectedCallee.linkedNode.paramList.params[i];
         const paramType = expectedCallee.parameterTypes[i];
 
-        let label = stringifyResolvedType(applyTemplateTranslator(paramType, info.calleeTemplateTranslator));
-        if (paramIdentifier.identifier !== undefined) label += ' ' + paramIdentifier.identifier?.text;
+        let label = stringifyResolvedType(applyTemplateMapping(paramType, info.calleeTemplateMapping));
+        if (paramIdentifier.identifier !== undefined) {
+            label += ' ' + paramIdentifier.identifier?.text;
+        }
+
         const parameter: ParameterInformation = {label: label};
 
-        if (i > 0) signatureLabel += ', ';
+        if (i > 0) {
+            signatureLabel += ', ';
+        }
+
         signatureLabel += label;
 
         const passingRanges = info.callerArgumentsNode.argList.map(arg => arg.assign.nodeRange);
         if (i < passingRanges.length && caret.isLessThan(passingRanges[i].start.location.start) === false) {
             activeIndex = i;
-            if (passingRanges[i].end.next?.text === ',') activeIndex++;
+            if (passingRanges[i].end.next?.text === ',') {
+                activeIndex++;
+            }
         }
 
         parameters.push(parameter);
@@ -78,14 +87,11 @@ function getFunctionSignature(info: FunctionCallInfo, expectedCallee: SymbolFunc
     return signature;
 }
 
-function sortFunctionsByPriority(functions: readonly SymbolFunction[]): SymbolFunction[] {
+// Project declarations are listed before as.predefined ones that they redeclare.
+function sortFunctionsByPriority(functions: readonly FunctionSymbol[]): FunctionSymbol[] {
     return [...functions].sort((lhs, rhs) => getFunctionPriority(lhs) - getFunctionPriority(rhs));
 }
 
-function getPreferredFunction(functions: readonly SymbolFunction[]): SymbolFunction {
-    return sortFunctionsByPriority(functions)[0];
-}
-
-function getFunctionPriority(symbol: SymbolFunction): number {
+function getFunctionPriority(symbol: FunctionSymbol): number {
     return symbol.identifierToken.location.path.endsWith('as.predefined') ? 1 : 0;
 }

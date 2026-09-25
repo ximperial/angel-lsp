@@ -1,116 +1,278 @@
-import {tokenize} from "../../src/compiler_tokenizer/tokenizer";
-import {parseAfterPreprocessed} from "../../src/compiler_parser/parser";
+import {tokenize} from '../../src/compiler_tokenizer/tokenizer';
+import {parseAfterPreprocess} from '../../src/compiler_parser/parser';
 import {diagnostic} from '../../src/core/diagnostic';
-import {preprocessAfterTokenized} from "../../src/compiler_parser/parserPreprocess";
+import {preprocessAfterTokenize} from '../../src/compiler_parser/parserPreprocess';
+import {FileContentUnit} from '../inspectorUtils';
+import {ok} from 'node:assert';
+import {copyGlobalSettings, resetGlobalSettings} from '../../src/core/settings';
 
-function testParser(content: string, expectSuccess: boolean) {
-    it(`parses: ${content}`, () => {
-        diagnostic.beginSession();
-
-        const uri = "/foo/bar.as";
-        const rawTokens = tokenize(uri, content);
-        const preprocessedTokens = preprocessAfterTokenized(rawTokens);
-        parseAfterPreprocessed(preprocessedTokens.preprocessedTokens);
-
-        const diagnosticsInParser = diagnostic.endSession();
-        const hasError = diagnosticsInParser.length > 0;
-        if ((expectSuccess && hasError) || (!expectSuccess && !hasError)) {
-            const diagnostic = diagnosticsInParser[0];
-            const message = diagnostic.message;
-            const line = diagnostic.range.start.line;
-            const character = diagnostic.range.start.character;
-            throw new Error(`${message} (:${line}:${character})`);
-        }
-    });
+function testParser(file: string | FileContentUnit, expectSuccess: boolean) {
+    const diagnosticsInParser = getParserDiagnostics(file);
+    const hasError = diagnosticsInParser.length > 0;
+    if ((expectSuccess && hasError) || (!expectSuccess && !hasError)) {
+        const diagnostic = diagnosticsInParser[0];
+        const message = diagnostic.message;
+        const line = diagnostic.range.start.line;
+        const character = diagnostic.range.start.character;
+        throw new Error(`${message} (:${line}:${character})`);
+    }
 }
 
-function expectSuccess(content: string) {
+function getParserDiagnostics(file: string | FileContentUnit) {
+    diagnostic.beginSession();
+
+    let content: string;
+    let uri: string;
+    if (typeof file === 'string') {
+        content = file;
+        uri = 'file:///path/to/file.as';
+    } else {
+        content = file.content;
+        uri = file.uri;
+    }
+
+    const rawTokens = tokenize(uri, content);
+    const preprocessedTokens = preprocessAfterTokenize(rawTokens, []);
+    parseAfterPreprocess(preprocessedTokens.preprocessedTokens);
+
+    return diagnostic.endSession();
+}
+
+function expectSuccess(content: string | FileContentUnit, uri: string = `file:///path/to/file.as`) {
     testParser(content, true);
 }
 
 // We also should test for failures to avoid an infinite loop.
-function expectFailure(content: string) {
+function expectFailure(content: string | FileContentUnit, uri: string = `file:///path/to/file.as`) {
     testParser(content, false);
 }
 
-// TODO: Separate tests for as.predefined?
+describe('Parser', () => {
+    it('parses an empty function declaration', () => {
+        expectSuccess('void foo() {}');
+    });
 
-describe("Parser", () => {
-    expectSuccess("void foo() {}");
+    it('parses function declarations without bodies in as.predefined', () => {
+        expectSuccess({
+            uri: 'file:///path/to/as.predefined',
+            content: `
+            void foo();
 
-    expectSuccess("int MyValue = 0; float MyFloat = 15.f;");
+            class Foo {
+                void bar() const;
+            }
+            `
+        });
+    });
 
-    expectSuccess("const uint Flag1 = 0x01;");
+    it('parses variable declarations with numeric initializers', () => {
+        expectSuccess('int MyValue = 0; float MyFloat = 15.f;');
+    });
 
-    expectSuccess(`
-        class Foo
-        {
-            void bar() { value++; }
-            int value;
+    it('parses const declarations with hex initializers', () => {
+        expectSuccess('const uint Flag1 = 0x01;');
+    });
+
+    it('parses class declarations with methods and fields', () => {
+        expectSuccess(`
+            class Foo
+            {
+                void bar() { value++; }
+                int value;
+            }
+        `);
+    });
+
+    it('parses interface declarations', () => {
+        expectSuccess(`
+            interface MyInterface
+            {
+                void DoSomething();
+            }
+        `);
+    });
+
+    it('parses virtual properties in interface declarations', () => {
+        expectSuccess(`
+            interface MyInterface
+            {
+                int value { get; set; }
+            }
+        `);
+    });
+
+    it('parses virtual property accessors without bodies', () => {
+        expectSuccess(`
+            class Foo
+            {
+                int value { get; set; }
+            }
+        `);
+    });
+
+    it('parses enum declarations with explicit values', () => {
+        expectSuccess(`
+            enum MyEnum
+            {
+                eValue0,
+                eValue2 = 2,
+                eValue3,
+                eValue200 = eValue2 * 100
+            }
+        `);
+    });
+
+    it('parses enum declarations with trailing commas', () => {
+        expectSuccess(`
+            enum Foo
+            {
+                fizz,
+                buzz,
+            }
+        `);
+    });
+
+    it('parses funcdef declarations', () => {
+        expectSuccess('funcdef bool CALLBACK(int, int);');
+    });
+
+    it('parses typedef declarations', () => {
+        expectSuccess('typedef double real64;');
+    });
+
+    it('parses list factory declarations and initializer lists', () => {
+        expectSuccess({
+            uri: 'file:///path/to/as.predefined',
+            content: `
+            class int_array {
+                // List patterns require a semicolon after the closing brace.
+                int_array@ f(int &in) {repeat int};
+            }
+
+            class dictionary {
+                dictionary@ f(int &in) {repeat {string, ?}};
+            }
+
+            class grid {
+                grid@ f(int &in) {repeat {repeat_same int}};
+            }
+            `
+        });
+    });
+
+    it('parses namespace declarations', () => {
+        expectSuccess(`
+            namespace A
+            {
+                void function() { variable++; }
+                int variable;
+            }
+        `);
+    });
+
+    it('reports one parser error for an unexpected token inside a namespace', () => {
+        const diagnostics = getParserDiagnostics(`
+            namespace ns {
+                123
+            }
+        `);
+
+        ok(diagnostics.length === 1);
+    });
+
+    it('parses enum casts and enum bitwise expressions', () => {
+        expectSuccess(`
+            enum Test {
+                A = 1,
+                B = 2
+            }
+
+            void Main() {
+                Test x = Test(1);
+                Test y = Test(Test::A + Test::B | Test::A);
+                bool z = (y & Test::A) != 0;
+                int v = 1;
+                bool w = v == Test::A;
+            }
+        `);
+    });
+
+    it('parses not expressions', () => {
+        expectSuccess(`bool foo = not true; bool bar = not not false;`);
+    });
+
+    it('parses multiple global variables initialized by constructor calls', () => {
+        expectSuccess('array<float> a(16), b(16);');
+        expectSuccess('namespace N { int a(1), b(2); float c(1), d; }');
+    });
+
+    it('parses null and nil literals', () => {
+        expectSuccess(`void foo() { auto a = null; auto b = nil; }`);
+    });
+
+    it('parses files with a BOM', () => {
+        expectSuccess(`\uFEFF // <-- BOM
+            void foo() { }`);
+    });
+
+    it('rejects an incomplete mixin', () => {
+        expectFailure(`mixin`);
+    });
+
+    it('rejects an incomplete funcdef', () => {
+        expectFailure(`funcdef`);
+    });
+
+    it('rejects typedef declarations without an identifier', () => {
+        expectFailure(`typedef int ;`);
+    });
+
+    it('rejects funcdef declarations without an identifier', () => {
+        expectFailure(`funcdef void ();`);
+    });
+
+    it('rejects function declarations without an identifier', () => {
+        expectFailure(`void 123() {}`);
+    });
+
+    it('rejects assignments without a right-hand side', () => {
+        expectFailure(`void test() { value = ; }`);
+    });
+
+    it('reports a typed enum base type error after the colon', () => {
+        const settings = copyGlobalSettings();
+        settings.supportsTypedEnumerations = true;
+        resetGlobalSettings(settings);
+
+        try {
+            const diagnostics = getParserDiagnostics(`enum Foo : Bar { A }`);
+
+            ok(diagnostics.some(diagnostic => diagnostic.message === 'Expected primitive type.'));
+        } finally {
+            resetGlobalSettings(undefined);
         }
-    `);
+    });
 
-    expectSuccess(`
-        interface MyInterface
-        {
-            void DoSomething();
-        }
-    `);
+    it('rejects an incomplete function declaration', () => {
+        expectFailure('void foo(');
+    });
 
-    expectSuccess(`
-        enum MyEnum
-        {
-            eValue0,
-            eValue2 = 2,
-            eValue3,
-            eValue200 = eValue2 * 100
-        }
-    `);
-
-    expectSuccess(`
-        enum Foo
-        {
-            fizz,
-            buzz,
-        }
-    `);
-
-    expectSuccess("funcdef bool CALLBACK(int, int);");
-
-    expectSuccess("typedef double real64;");
-
-    expectSuccess(`
-        namespace A
-        {
-            void function() { variable++; }
-            int variable;
-        }
-    `);
-
-    expectSuccess(`
-        enum Test {
-            A = 1,
-            B = 2
-        }
-
-        void Main() {
-            Test x = Test(1);
-            Test y = Test(Test::A + Test::B | Test::A);
-            bool z = (y & Test::A) != 0;
-            int v = 1;
-            bool w = v == Test::A;
-        }
-    `);
-
-    expectSuccess(`bool foo = not true; bool bar = not not false;`);
-
-    expectSuccess(`void foo() { auto a = null; auto b = nil; }`);
-
-    expectSuccess(`\uFEFF // <-- BOM
-        void foo() { }`
-    );
-
-    expectFailure(`funcdef`);
-
-    expectFailure("void foo(");
+    it('parses exponential notation', () => {
+        expectSuccess(`
+            void test() {
+                double e0 = 1e10;
+                e0 = 1e+10;
+                e0 = 1e-10;
+                e0 = 1.5e10;
+                e0 = 1.5e+10;
+                e0 = 1.5e-10;
+                e0 = .5e10;
+                e0 = .5e+10;
+                e0 = .5e-10;
+                e0 = 1.E10;
+                e0 = 1.E+10;
+                e0 = 1.E-10;
+            }
+        `);
+    });
 });

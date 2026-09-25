@@ -1,40 +1,37 @@
 import * as lsp from 'vscode-languageserver/node';
 import * as lsp_textDocument from 'vscode-languageserver-textdocument';
 
-import {highlightForModifierList, highlightForTokenList} from "./core/highlight";
-import {provideDefinitionAsToken} from "./services/definition";
-import {
-    Inspector
-} from "./inspector/inspector";
-import {CompletionItemWrapper, provideCompletion} from "./services/completion";
-import {provideSemanticTokens} from "./services/semanticTokens";
-import {provideReferences} from "./services/reference";
-import {TextEdit} from "vscode-languageserver-types/lib/esm/main";
-import {Location} from "vscode-languageserver";
-import {getGlobalSettings, resetGlobalSettings} from "./core/settings";
-import {formatFile} from "./formatter/formatter";
-import {provideSignatureHelp} from "./services/signatureHelp";
-import {TextLocation, TextPosition, TextRange} from "./compiler_tokenizer/textLocation";
-import {provideInlayHint} from "./services/inlayHint";
-import {DiagnosticSeverity} from "vscode-languageserver-types";
-import {CodeAction} from "vscode-languageserver-protocol";
-import {provideCodeAction} from "./services/codeAction";
-import {provideCompletionOfToken} from "./services/completionExtension";
-import {provideCompletionResolve} from "./services/completionResolve";
-import {logger} from "./core/logger";
-import {provideHover} from "./services/hover";
-import {provideDocumentSymbol} from "./services/documentSymbol";
-import {documentOnTypeFormattingProvider} from "./services/documentOnTypeFormatting";
-import {SimpleProfiler} from "./utils/simpleProfiler";
-import {printSymbolScope} from "./compiler_analyzer/symbolUtils";
-import {safeWriteFile} from "./utils/fileUtils";
-import {moveInlayHintByChanges} from "./service/contentChangeApplier";
-import {provideDefinitionFallback} from "./services/definitionExtension";
-import {CodeActionWrapper} from "./actions/utils";
-import {getEditorState} from "./core/editorState";
+import {tokenHighlightModifierList, tokenHighlightList} from './core/highlight';
+import {provideDefinitionAsToken} from './services/definition';
+import {Inspector} from './inspector/inspector';
+import {CompletionItemWrapper, provideCompletion} from './services/completion';
+import {provideSemanticTokens} from './services/semanticTokens';
+import {provideReferences} from './services/reference';
+import {TextEdit} from 'vscode-languageserver-types/lib/esm/main';
+import {Location} from 'vscode-languageserver';
+import {getGlobalSettings, resetGlobalSettings} from './core/settings';
+import {formatFile} from './formatter/formatter';
+import {provideSignatureHelp} from './services/signatureHelp';
+import {TextLocation, TextPosition, TextRange} from './compiler_tokenizer/textLocation';
+import {provideInlayHint} from './services/inlayHint';
+import {provideCodeAction} from './services/codeAction';
+import {provideCompletionOnToken} from './services/completionOnToken';
+import {provideCompletionResolve} from './services/completionResolve';
+import {CaretContext} from './services/completion/caretContext';
+import {logger} from './core/logger';
+import {provideHover} from './services/hover';
+import {provideDocumentSymbol} from './services/documentSymbol';
+import {documentOnTypeFormattingProvider} from './services/documentOnTypeFormatting';
+import {SimpleProfiler} from './utils/simpleProfiler';
+import {printSymbolScope} from './compiler_analyzer/symbolUtils';
+import {safeWriteFile} from './utils/fileUtils';
+import {moveInlayHintByChanges} from './service/contentChangeApplier';
+import {provideDefinitionFallback} from './services/definitionExtension';
+import {CodeActionWrapper} from './actions/utils';
+import {getEditorState} from './core/editorState';
 
-// Create a connection for the server, using Node's IPC as a transport.
-// Also include all preview / proposed LSP features.
+// Create the server connection over Node IPC.
+// Enable all preview and proposed LSP features as well.
 const s_connection = lsp.createConnection(lsp.ProposedFeatures.all);
 
 let s_hasConfigurationCapability = false;
@@ -48,17 +45,14 @@ let s_hasDiagnosticRelatedInformationCapability = false;
 s_connection.onInitialize((params: lsp.InitializeParams) => {
     const capabilities = params.capabilities;
 
-    // Does the client support the `workspace/configuration` request?
-    // If not, we fall back using global settings.
+    // Check whether the client supports the `workspace/configuration` request.
+    // Otherwise, fall back to the global settings.
 
-    s_hasConfigurationCapability =
-        capabilities.workspace?.configuration ?? false;
+    s_hasConfigurationCapability = capabilities.workspace?.configuration ?? false;
 
-    s_hasWorkspaceFolderCapability =
-        capabilities.workspace?.workspaceFolders ?? false;
+    s_hasWorkspaceFolderCapability = capabilities.workspace?.workspaceFolders ?? false;
 
-    s_hasWorkspaceDiagnosticsRefreshCapability =
-        capabilities.workspace?.diagnostics?.refreshSupport ?? false;
+    s_hasWorkspaceDiagnosticsRefreshCapability = capabilities.workspace?.diagnostics?.refreshSupport ?? false;
 
     s_hasDiagnosticRelatedInformationCapability =
         capabilities.textDocument?.publishDiagnostics?.relatedInformation ?? false;
@@ -73,19 +67,20 @@ s_connection.onInitialize((params: lsp.InitializeParams) => {
             referencesProvider: true,
             documentSymbolProvider: true,
             codeActionProvider: {
-                codeActionKinds: ["quickfix"], // FIXME
-                resolveProvider: true,
+                codeActionKinds: ['quickfix'], // FIXME
+                resolveProvider: true
             },
             renameProvider: true,
             hoverProvider: true,
             signatureHelpProvider: {
-                triggerCharacters: ["(", ")", ","],
-                retriggerCharacters: ["="],
+                triggerCharacters: ['(', ')', ','],
+                retriggerCharacters: ['=']
             },
             completionProvider: {
                 resolveProvider: true,
                 triggerCharacters: [
-                    '.', ':', // for autocomplete symbol
+                    '.',
+                    ':', // for autocomplete symbol
                     '/' // for autocomplete file path
                 ]
             },
@@ -95,10 +90,10 @@ s_connection.onInitialize((params: lsp.InitializeParams) => {
             // },
             semanticTokensProvider: {
                 legend: {
-                    tokenTypes: highlightForTokenList,
-                    tokenModifiers: highlightForModifierList
+                    tokenTypes: tokenHighlightList,
+                    tokenModifiers: tokenHighlightModifierList
                 },
-                range: false, // if true, the server supports range-based requests
+                range: false, // Set to true to support range-based requests.
                 full: true
             },
             inlayHintProvider: true,
@@ -106,7 +101,7 @@ s_connection.onInitialize((params: lsp.InitializeParams) => {
             documentRangeFormattingProvider: true,
             documentOnTypeFormattingProvider: {
                 firstTriggerCharacter: ';',
-                moreTriggerCharacter: ['}', '\n'],
+                moreTriggerCharacter: ['}', '\n']
             }
         }
     };
@@ -136,7 +131,7 @@ s_connection.onInitialize((params: lsp.InitializeParams) => {
 });
 
 function reloadSettings() {
-    s_connection.workspace.getConfiguration('angelScript').then((config) => {
+    s_connection.workspace.getConfiguration('angelScript').then(config => {
         resetGlobalSettings(config);
         s_inspector.reinspectAllFiles();
         if (s_hasWorkspaceDiagnosticsRefreshCapability) {
@@ -147,7 +142,7 @@ function reloadSettings() {
 
 s_connection.onInitialized(() => {
     if (s_hasConfigurationCapability) {
-        // Register for all configuration changes.
+        // Register for configuration change notifications.
         s_connection.client.register(lsp.DidChangeConfigurationNotification.type, undefined);
     }
 
@@ -157,13 +152,13 @@ s_connection.onInitialized(() => {
         });
     }
 
-    // Reload for workspace settings.
+    // Load the workspace settings.
     reloadSettings();
 });
 
-// The global settings, used when the `workspace/configuration` request is not supported by the client.
-// Please note that this is not the case when using this server with the client provided in this example
-// but could happen with other clients.
+// Use these global settings when the client does not support `workspace/configuration`.
+// That does not happen with the sample client in this repository,
+// but it may happen with other clients.
 
 s_connection.onDidChangeConfiguration(change => {
     reloadSettings();
@@ -196,23 +191,23 @@ s_connection.onDidOpenTextDocument(params => {
     );
 
     if (s_inspector.getRecord(document.uri).content === document.text) {
-        // No need to re-inspect because the contents of the file are identical.
+        // Reinspection is unnecessary because the file content is unchanged.
         return;
     }
 
     s_inspector.inspectFile(document.uri, document.text, {isOpen: true});
 });
 
-s_connection.onDidChangeTextDocument((params) => {
+s_connection.onDidChangeTextDocument(params => {
     const document = s_documentMap.get(params.textDocument.uri);
     if (document === undefined) {
-        s_connection.console.error('Missing a document: ' + params.textDocument.uri);
+        s_connection.console.error('Document not found: ' + params.textDocument.uri);
         return;
     }
 
     lsp_textDocument.TextDocument.update(document, params.contentChanges, params.textDocument.version);
 
-    // profileInspect(document); // for debug
+    // profileInspect(document); // Debug only.
 
     s_inspector.inspectFile(document.uri, document.getText(), {isOpen: true, changes: params.contentChanges});
 
@@ -244,7 +239,7 @@ s_connection.workspace.onDidDeleteFiles(params => {
 // FIXME: Should we also handle `onWillSaveTextDocument`, `onWillSaveTextDocumentWaitUntil` and `onDidSaveTextDocument`?
 
 s_connection.onDidChangeWatchedFiles(params => {
-    // Maybe we don't need to do anything here, right?
+    // We may not need to do anything here.
     // https://github.com/microsoft/vscode-discussions/discussions/511
 });
 
@@ -262,7 +257,7 @@ function profileInspect(document: lsp_textDocument.TextDocument) {
 
 // -----------------------------------------------
 // Semantic Tokens Provider
-s_connection.languages.semanticTokens.on((params) => {
+s_connection.languages.semanticTokens.on(params => {
     return provideSemanticTokens(s_inspector.getRecord(params.textDocument.uri).rawTokens);
 });
 
@@ -271,7 +266,7 @@ s_connection.languages.semanticTokens.on((params) => {
 
 const s_inlayHintsCache: Map<string, lsp.InlayHint[]> = new Map();
 
-s_connection.languages.inlayHint.on((params) => {
+s_connection.languages.inlayHint.on(params => {
     const uri = params.textDocument.uri;
     const range = TextRange.create(params.range);
     const record = s_inspector.getRecord(uri);
@@ -280,8 +275,10 @@ s_connection.languages.inlayHint.on((params) => {
         return s_inlayHintsCache.get(uri);
     }
 
-    const inlineHints =
-        provideInlayHint(record.analyzerScope.globalScope, new TextLocation(uri, range.start, range.end));
+    const inlineHints = provideInlayHint(
+        record.analyzerScope.globalScope,
+        new TextLocation(uri, range.start, range.end)
+    );
 
     s_inlayHintsCache.set(uri, inlineHints);
 
@@ -290,14 +287,16 @@ s_connection.languages.inlayHint.on((params) => {
 
 // -----------------------------------------------
 // Definition Provider
-s_connection.onDefinition((params) => {
+s_connection.onDefinition(params => {
     const record = s_inspector.getRecord(params.textDocument.uri);
     const globalScope = record.analyzerScope.globalScope;
 
     const caret = TextPosition.create(params.position);
 
     const definition = provideDefinitionAsToken(globalScope, getAllGlobalScopes(), caret);
-    if (definition !== undefined) return definition.location.toServerLocation();
+    if (definition !== undefined) {
+        return definition.location.toServerLocation();
+    }
 
     return provideDefinitionFallback(record.rawTokens, globalScope, caret);
 });
@@ -314,14 +313,11 @@ function getReferenceLocations(params: lsp.TextDocumentPositionParams): Location
 
     const caret = TextPosition.create(params.position);
 
-    const references = provideReferences(
-        globalScope,
-        getAllGlobalScopes(),
-        caret);
+    const references = provideReferences(globalScope, getAllGlobalScopes(), caret);
     return references.map(ref => ref.location.toServerLocation());
 }
 
-s_connection.onReferences((params) => {
+s_connection.onReferences(params => {
     return getReferenceLocations(params);
 });
 
@@ -334,21 +330,21 @@ s_connection.onDocumentSymbol(params => {
 // -----------------------------------------------
 // Code Action Provider
 
-let s_lastCodeAction: CodeActionWrapper [] = [];
+let s_lastCodeAction: CodeActionWrapper[] = [];
 
-s_connection.onCodeAction((params) => {
+s_connection.onCodeAction(params => {
     const globalScope = s_inspector.getRecord(params.textDocument.uri).analyzerScope.globalScope;
 
     const range = TextRange.create(params.range);
 
     s_lastCodeAction = provideCodeAction(globalScope, getAllGlobalScopes(), range);
 
-    s_lastCodeAction.forEach((action, i) => action.action.data = i);
+    s_lastCodeAction.forEach((action, i) => (action.action.data = i));
 
     return s_lastCodeAction.map(action => action.action);
 });
 
-s_connection.onCodeActionResolve((action) => {
+s_connection.onCodeActionResolve(action => {
     const index = action.data as number;
 
     const resolvedAction = s_lastCodeAction[index];
@@ -364,13 +360,16 @@ s_connection.onCodeActionResolve((action) => {
 
 // -----------------------------------------------
 // Rename Provider
-s_connection.onRenameRequest((params) => {
+s_connection.onRenameRequest(params => {
     const locations = getReferenceLocations(params);
 
-    const changes: { [uri: string]: TextEdit[] } = {};
+    const changes: {[uri: string]: TextEdit[]} = {};
     locations.forEach(location => {
         const uri = location.uri;
-        if (changes[uri] === undefined) changes[uri] = [];
+        if (changes[uri] === undefined) {
+            changes[uri] = [];
+        }
+
         changes[uri].push({
             range: location.range,
             newText: params.newName
@@ -382,7 +381,7 @@ s_connection.onRenameRequest((params) => {
 
 // -----------------------------------------------
 // Hover Provider
-s_connection.onHover((params) => {
+s_connection.onHover(params => {
     s_inspector.flushRecord(params.textDocument.uri);
 
     const globalScope = s_inspector.getRecord(params.textDocument.uri).analyzerScope.globalScope;
@@ -394,28 +393,42 @@ s_connection.onHover((params) => {
 
 // -----------------------------------------------
 // Completion Provider
-const s_lastCompletion: { uri: string; items: CompletionItemWrapper[] } = {uri: '', items: [],};
+const s_lastCompletion: {uri: string; items: CompletionItemWrapper[]} = {uri: '', items: []};
 
 s_connection.onCompletion((params: lsp.TextDocumentPositionParams): lsp.CompletionItem[] => {
     const uri = params.textDocument.uri;
     const caret = TextPosition.create(params.position);
+    const record = s_inspector.getRecord(uri);
+    const caretContext = new CaretContext(
+        record.rawTokens,
+        record.preprocessedOutput.preprocessedTokens,
+        record.ast,
+        caret
+    );
 
     // Determine completion candidates based on the token.
     // If the token is a comment, suppress completion candidates here.
-    const completionsOfToken = provideCompletionOfToken(s_inspector.getRecord(uri).rawTokens, caret);
-    if (completionsOfToken !== undefined) {
-        return completionsOfToken;
+    const completionsOnToken = provideCompletionOnToken(caretContext);
+    if (completionsOnToken !== undefined) {
+        return completionsOnToken;
     }
 
     s_inspector.flushRecord(uri);
 
-    const globalScope = s_inspector.getRecord(uri).analyzerScope;
+    const globalScope = record.analyzerScope;
     if (globalScope === undefined) {
         return [];
     }
 
     // Collect completion candidates for symbols.
-    const items = provideCompletion(globalScope.globalScope, TextPosition.create(params.position));
+    const items = provideCompletion(
+        record.rawTokens,
+        record.preprocessedOutput.preprocessedTokens,
+        record.preprocessedOutput.definedSymbols,
+        record.ast,
+        globalScope.globalScope,
+        TextPosition.create(params.position)
+    );
 
     items.forEach((item, index) => {
         // Attach the index to the data field so that we can resolve the item later.
@@ -429,11 +442,13 @@ s_connection.onCompletion((params: lsp.TextDocumentPositionParams): lsp.Completi
     return items.map(item => item.item);
 });
 
-// This handler resolves additional information for the item selected in the completion list.
+// Resolve additional information for the selected completion item.
 s_connection.onCompletionResolve((item: lsp.CompletionItem): lsp.CompletionItem => {
     const globalScope = s_inspector.getRecord(s_lastCompletion.uri).analyzerScope.globalScope;
 
-    if (typeof item.data !== 'number') return item;
+    if (typeof item.data !== 'number') {
+        return item;
+    }
 
     const itemWrapper = s_lastCompletion.items[item.data];
     if (itemWrapper.item.label !== item.label) {
@@ -445,39 +460,39 @@ s_connection.onCompletionResolve((item: lsp.CompletionItem): lsp.CompletionItem 
 
 // -----------------------------------------------
 // Signature Help Provider
-s_connection.onSignatureHelp((params) => {
+s_connection.onSignatureHelp(params => {
     const uri = params.textDocument.uri;
 
     s_inspector.flushRecord(uri);
 
     const diagnosedScope = s_inspector.getRecord(uri).analyzerScope;
-    if (diagnosedScope === undefined) return null;
+    if (diagnosedScope === undefined) {
+        return null;
+    }
 
     return provideSignatureHelp(diagnosedScope.globalScope, params.position, uri);
 });
 
 // -----------------------------------------------
 // Document Formatting Provider
-s_connection.onDocumentFormatting((params) => {
+s_connection.onDocumentFormatting(params => {
     s_inspector.flushRecord();
     const record = s_inspector.getRecord(params.textDocument.uri);
     return formatFile(record.content, record.rawTokens, record.ast);
 });
 
-s_connection.onExecuteCommand((params) => {
-
-});
+s_connection.onExecuteCommand(params => {});
 
 // -----------------------------------------------
 // Document on Type Formatting Provider
-s_connection.onDocumentOnTypeFormatting((params) => {
+s_connection.onDocumentOnTypeFormatting(params => {
     const record = s_inspector.getRecord(params.textDocument.uri);
 
     const result = documentOnTypeFormattingProvider(
         record.rawTokens,
         record.analyzerScope.globalScope,
         TextPosition.create(params.position),
-        params.ch,
+        params.ch
     );
 
     return result;

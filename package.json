@@ -4,7 +4,7 @@
     "description": "VSCode extensions for AngelScript Language Server",
     "author": "sashi0034",
     "license": "MIT",
-    "version": "0.3.85",
+    "version": "0.3.103",
     "repository": {
         "type": "git",
         "url": "https://github.com/sashi0034/angel-lsp"
@@ -77,12 +77,6 @@
                 "path": "./angelscript.tmLanguage.json"
             }
         ],
-        "snippets": [
-            {
-                "language": "angelscript",
-                "path": "./snippets.json"
-            }
-        ],
         "commands": [
             {
                 "command": "angelScript.debug.printGlobalScope",
@@ -91,7 +85,7 @@
         ],
         "semanticTokenTypes": [
             {
-                "id": "keywordControl",
+                "id": "controlKeyword",
                 "description": "For keywords that affect control flow.",
                 "superType": "keyword"
             }
@@ -103,20 +97,13 @@
                     "keyword": [
                         "keyword.angelscript"
                     ],
-                    "keywordControl": [
+                    "controlKeyword": [
                         "keyword.control.angelscript"
                     ]
                 }
             }
         ],
         "configurationDefaults": {
-            "editor.semanticTokenColorCustomizations": {
-                "rules": {
-                    "builtin": "#00b0e0",
-                    "directive": "#ffe020",
-                    "metadata": "#bb55ff"
-                }
-            },
             "[angelscript]": {
                 "editor.formatOnType": true
             }
@@ -173,6 +160,18 @@
                     "default": false,
                     "description": "Hoist enum members to their parents scope for auto-completion."
                 },
+                "angelScript.completion.builtinKeywords": {
+                    "scope": "window",
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Provide AngelScript built-in keyword completion items."
+                },
+                "angelScript.completion.snippets": {
+                    "scope": "window",
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Provide context-aware snippets from the language server completion provider."
+                },
                 "angelScript.explicitPropertyAccessor": {
                     "scope": "window",
                     "type": "boolean",
@@ -208,6 +207,17 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Whether your codebase uses the `asEP_USE_CHARACTER_LITERALS` option."
+                },
+                "angelScript.definedSymbols": {
+                    "scope": "window",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        "EDITOR_ONLY"
+                    ],
+                    "description": "Symbols that are considered defined before preprocessing. These symbols are used when evaluating #if directives."
                 },
                 "angelScript.files.angelScript": {
                     "scope": "window",
@@ -320,6 +330,7 @@
         "compile": "tsc -b",
         "watch": "tsc -b -w",
         "lint": "eslint ./client/src ./server/src --ext .ts,.tsx",
+        "format": "prettier --write .",
         "postinstall": "cd client && npm install && cd ../server && npm install && cd ..",
         "test": "sh ./scripts/e2e.sh"
     },
@@ -329,7 +340,10 @@
         "@typescript-eslint/eslint-plugin": "^7.1.0",
         "@typescript-eslint/parser": "^7.1.0",
         "eslint": "^8.57.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-prettier": "^5.5.5",
         "mocha": "^10.3.0",
+        "prettier": "^3.8.1",
         "ts-node": "^10.9.2",
         "typescript": "^5.3.3"
     },

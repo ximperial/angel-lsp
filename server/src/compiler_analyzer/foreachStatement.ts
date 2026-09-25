@@ -1,37 +1,30 @@
-import {ResolvedType} from "./resolvedType";
-import {analyzerDiagnostic} from "./analyzerDiagnostic";
-import {TokenRange} from "../compiler_tokenizer/tokenRange";
-import {tryResolveActiveScope} from "./symbolScope";
-import {SymbolObjectHolder} from "./symbolObject";
+import {applyTemplateMapping, ResolvedType} from './resolvedType';
+import {analyzerDiagnostic} from './analyzerDiagnostic';
+import {TokenRange} from '../compiler_tokenizer/tokenRange';
+import {tryResolveActiveScope} from './symbolScope';
+import {SymbolObjectHolder} from './symbolObject';
 
 export function checkForEachIterator(
     iteratorType: ResolvedType | undefined,
     nodeRange: TokenRange
 ): (ResolvedType | undefined)[] | undefined {
-    if (iteratorType === undefined) return undefined;
+    if (iteratorType === undefined) {
+        return undefined;
+    }
 
     if (iteratorType.typeOrFunc.isFunction()) {
-        analyzerDiagnostic.error(
-            nodeRange.getBoundingLocation(),
-            "The iterator type cannot be a function",
-        );
+        analyzerDiagnostic.error(nodeRange.getBoundingLocation(), 'The iterator type cannot be a function.');
         return undefined;
     }
 
     if (iteratorType.typeOrFunc.membersScopePath === undefined) {
-        analyzerDiagnostic.error(
-            nodeRange.getBoundingLocation(),
-            "Invalid iterator type",
-        );
+        analyzerDiagnostic.error(nodeRange.getBoundingLocation(), 'Invalid iterator type.');
         return undefined;
     }
 
     const memberScope = tryResolveActiveScope(iteratorType.typeOrFunc.membersScopePath);
     if (memberScope === undefined) {
-        analyzerDiagnostic.error(
-            nodeRange.getBoundingLocation(),
-            "The iterator type members are not available",
-        );
+        analyzerDiagnostic.error(nodeRange.getBoundingLocation(), 'The iterator type members are not available.');
         return undefined;
     }
 
@@ -40,13 +33,21 @@ export function checkForEachIterator(
     const opForNext = memberScope.lookupSymbol('opForNext');
     if (opForBegin === undefined || opForEnd === undefined || opForNext === undefined) {
         const missing: string[] = [];
-        if (opForBegin === undefined) missing.push("'opForBegin'");
-        if (opForEnd === undefined) missing.push("'opForEnd'");
-        if (opForNext === undefined) missing.push("'opForNext'");
+        if (opForBegin === undefined) {
+            missing.push("'opForBegin'");
+        }
+
+        if (opForEnd === undefined) {
+            missing.push("'opForEnd'");
+        }
+
+        if (opForNext === undefined) {
+            missing.push("'opForNext'");
+        }
 
         analyzerDiagnostic.error(
             nodeRange.getBoundingLocation(),
-            "The iterator type does not have " + missing.join(", "),
+            'The iterator type does not have ' + missing.join(', ')
         );
         return undefined;
     }
@@ -56,18 +57,17 @@ export function checkForEachIterator(
         let opForValue: SymbolObjectHolder | undefined;
         if (i == 0) {
             // Special case for only one item; try the opForValue without an index suffix at first
-            opForValue = memberScope.lookupSymbol('opForValue')
-                ?? memberScope.lookupSymbol('opForValue0');
+            opForValue = memberScope.lookupSymbol('opForValue') ?? memberScope.lookupSymbol('opForValue0');
         } else {
             opForValue = memberScope.lookupSymbol('opForValue' + i);
         }
 
-        if (opForValue === undefined) break;
+        if (opForValue === undefined) {
+            break;
+        }
 
         let type = opForValue.isFunctionHolder() ? opForValue.first.returnType : undefined;
-        if (type?.identifierToken !== undefined && iteratorType.templateTranslator !== undefined) {
-            type = iteratorType.templateTranslator?.get(type.identifierToken) ?? type;
-        }
+        type = applyTemplateMapping(type, iteratorType.templateMapping);
 
         forValueTypes.push(type);
 
@@ -77,10 +77,7 @@ export function checkForEachIterator(
     }
 
     if (forValueTypes.length === 0) {
-        analyzerDiagnostic.error(
-            nodeRange.getBoundingLocation(),
-            "The iterator type does not have 'opForValue'",
-        );
+        analyzerDiagnostic.error(nodeRange.getBoundingLocation(), "The iterator type does not define 'opForValue'.");
         return undefined;
     }
 

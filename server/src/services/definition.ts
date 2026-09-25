@@ -1,12 +1,9 @@
-import {
-    isNodeEnumOrClassOrInterface,
-    ScopePath,
-    SymbolObject
-} from "../compiler_analyzer/symbolObject";
-import {Position} from "vscode-languageserver";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-import {isAnonymousIdentifier, SymbolGlobalScope, SymbolScope} from "../compiler_analyzer/symbolScope";
-import {TextPosition} from "../compiler_tokenizer/textLocation";
+import {isNodeEnumOrClassOrInterface, ScopePath, SymbolObject} from '../compiler_analyzer/symbolObject';
+import {Position} from 'vscode-languageserver';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import {isAnonymousIdentifier, SymbolGlobalScope, SymbolScope} from '../compiler_analyzer/symbolScope';
+import {TextPosition} from '../compiler_tokenizer/textLocation';
+import {getScopeAccessMarkerToken} from '../compiler_analyzer/marker';
 
 /**
  * Search for the definition of the symbol at the cursor position.
@@ -24,16 +21,18 @@ export function provideDefinitionAsToken(
     allGlobalScopes: SymbolGlobalScope[],
     caret: TextPosition
 ): TokenObject | undefined {
-    return provideDefinition(globalScope, caret)?.identifierToken
+    return (
+        provideDefinition(globalScope, caret)?.identifierToken ??
         // fallback to namespace definition
-        ?? provideNamespaceDefinition(globalScope, allGlobalScopes, caret);
+        provideNamespaceDefinition(globalScope, allGlobalScopes, caret)
+    );
 }
 
 function provideDefinitionInternal(globalScope: SymbolGlobalScope, caret: TextPosition) {
     const filepath = globalScope.getContext().filepath;
 
     // Find the symbol that the caret is on in the reference list
-    for (const reference of globalScope.info.reference) {
+    for (const reference of globalScope.markers.reference) {
         const referencedLocation = reference.fromToken.location;
         if (referencedLocation.positionInRange(caret)) {
             // If the reference location is on the cursor, return the declaration
@@ -45,7 +44,11 @@ function provideDefinitionInternal(globalScope: SymbolGlobalScope, caret: TextPo
     return provideIdenticalDefinitionInternal(filepath, globalScope, caret);
 }
 
-function provideIdenticalDefinitionInternal(filepath: string, scope: SymbolScope, caret: TextPosition): SymbolObject | undefined {
+function provideIdenticalDefinitionInternal(
+    filepath: string,
+    scope: SymbolScope,
+    caret: TextPosition
+): SymbolObject | undefined {
     // Search a symbol in the symbol map in this scope if it is on the caret
     for (const [key, symbolHolder] of scope.symbolTable) {
         for (const symbol of symbolHolder.toList()) {
@@ -59,7 +62,9 @@ function provideIdenticalDefinitionInternal(filepath: string, scope: SymbolScope
     // At this point, search in child scopes because the symbol is not found in the current scope
     for (const [key, child] of scope.childScopeTable) {
         const jump = provideIdenticalDefinitionInternal(filepath, child, caret);
-        if (jump !== undefined) return jump;
+        if (jump !== undefined) {
+            return jump;
+        }
     }
 
     return undefined;
@@ -69,7 +74,11 @@ function provideIdenticalDefinitionInternal(filepath: string, scope: SymbolScope
 
 // Find the definition of the scope token at the cursor position.
 // This is a bit complicated because there may be multiple definitions of the namespace.
-function provideNamespaceDefinition(globalScope: SymbolGlobalScope, allGlobalScopes: SymbolGlobalScope[], caret: Position) {
+function provideNamespaceDefinition(
+    globalScope: SymbolGlobalScope,
+    allGlobalScopes: SymbolGlobalScope[],
+    caret: Position
+) {
     const declarationToken = findNamespaceDeclarationToken(globalScope, caret);
     if (declarationToken !== undefined) {
         // It is a namespace declaration token like 'namespace A { ... }'
@@ -79,22 +88,24 @@ function provideNamespaceDefinition(globalScope: SymbolGlobalScope, allGlobalSco
     // -----------------------------------------------
     // Since the namespace declaration token is not found, it is a namespace access token like 'A::B::C'
 
-    // namespaceList[0] --> '::' --> tokenOnCaret --> '::' --> ... --> tokenAfterNamespaces
-    const {accessScope, tokenOnCaret, tokenAfterNamespace} = findNamespaceTokenOnCaret(globalScope, caret);
+    // namespaceList[0] --> '::' --> tokenOnCaret --> '::' --> ... --> tokenAfterScopeAccess
+    const {accessScope, tokenOnCaret, tokenAfterScopeAccess} = findNamespaceTokenOnCaret(globalScope, caret);
     if (accessScope === undefined || tokenOnCaret === undefined) {
         return undefined;
     }
 
-    // The definition of token after namespace
-    const closetTokenDefinitionSymbol = tokenAfterNamespace === undefined
-        ? undefined
-        : provideDefinitionInternal(globalScope, tokenAfterNamespace.location.start);
+    // The definition of token after scope access
+    const closetTokenDefinitionSymbol =
+        tokenAfterScopeAccess === undefined
+            ? undefined
+            : provideDefinitionInternal(globalScope, tokenAfterScopeAccess.location.start);
 
     if (closetTokenDefinitionSymbol !== undefined) {
         // The definition of token after namespace exits, find the namespace token in its global scope.
         const destinationFilepath = closetTokenDefinitionSymbol.identifierToken.location.path;
-        const destinationGlobalScope =
-            allGlobalScopes.find(scope => scope.getContext().filepath === destinationFilepath);
+        const destinationGlobalScope = allGlobalScopes.find(
+            scope => scope.getContext().filepath === destinationFilepath
+        );
         if (destinationGlobalScope !== undefined) {
             return findNamespaceTokenNearPosition(
                 destinationGlobalScope,
@@ -106,10 +117,12 @@ function provideNamespaceDefinition(globalScope: SymbolGlobalScope, allGlobalSco
 
     // If the definition of token after namespace does not exist,
     // look for a matching namespace token in global scopes in all files.
-    for (const scope of [globalScope, ...allGlobalScopes]) { // Search from the current global scope
-        const namespaceToken =
-            findNamespaceTokenNearPosition(scope, accessScope.scopePath, new TextPosition(0, 0));
-        if (namespaceToken !== undefined) return namespaceToken;
+    for (const scope of [globalScope, ...allGlobalScopes]) {
+        // Search from the current global scope
+        const namespaceToken = findNamespaceTokenNearPosition(scope, accessScope.scopePath, new TextPosition(0, 0));
+        if (namespaceToken !== undefined) {
+            return namespaceToken;
+        }
     }
 
     return undefined;
@@ -124,44 +137,55 @@ function findNamespaceDeclarationToken(scope: SymbolScope, caret: Position): Tok
     }
 
     for (const [key, child] of scope.childScopeTable) {
-        if (scope.isAnonymousScope()) continue;
+        if (scope.isAnonymousScope()) {
+            continue;
+        }
 
         const result = findNamespaceDeclarationToken(child, caret);
-        if (result !== undefined) return result;
+        if (result !== undefined) {
+            return result;
+        }
     }
 
     return undefined;
 }
 
 function findNamespaceTokenOnCaret(globalScope: SymbolGlobalScope, caret: Position) {
-    // namespaceList[0] --> '::' --> namespaceList[1] --> '::' --> tokenAfterNamespace
+    // namespaceList[0] --> '::' --> namespaceList[1] --> '::' --> tokenAfterScopeAccess
     let accessScope: SymbolScope | undefined;
     let tokenOnCaret: TokenObject | undefined;
-    let tokenAfterNamespace: TokenObject | undefined;
+    let tokenAfterScopeAccess: TokenObject | undefined;
 
-    // It's a bit rough, but we'll reuse autocomplete info here
-    for (const info of globalScope.info.autocompleteNamespaceAccess) {
-        if (info.namespaceToken.location.positionInRange(caret)) {
-            accessScope = info.accessScope;
-            tokenOnCaret = info.namespaceToken;
-            tokenAfterNamespace = info.tokenAfterNamespaces;
+    // Use scope access markers to find the qualifier token under the caret.
+    for (const info of globalScope.markers.scopeAccess) {
+        const namespaceToken = getScopeAccessMarkerToken(info);
+        if (namespaceToken.location.positionInRange(caret)) {
+            accessScope = info.targetScope;
+            tokenOnCaret = namespaceToken;
+            tokenAfterScopeAccess = info.tokenAfterScopeAccess;
             break;
         }
     }
 
-    return {accessScope, tokenOnCaret, tokenAfterNamespace};
+    return {accessScope, tokenOnCaret, tokenAfterScopeAccess};
 }
 
-function findNamespaceTokenNearPosition(globalScope: SymbolGlobalScope, scopePath: ScopePath, position: TextPosition): TokenObject | undefined {
+function findNamespaceTokenNearPosition(
+    globalScope: SymbolGlobalScope,
+    scopePath: ScopePath,
+    position: TextPosition
+): TokenObject | undefined {
     const namespaceScope = globalScope.resolveScope(scopePath);
-    if (namespaceScope === undefined) return undefined;
+    if (namespaceScope === undefined) {
+        return undefined;
+    }
 
     let result: TokenObject | undefined;
     if (isNodeEnumOrClassOrInterface(namespaceScope.linkedNode)) {
-        // When the access scope may be an enum, class or interface
+        // The access scope may belong to an enum, class, or interface.
         const linkedNode = namespaceScope.linkedNode;
 
-        // The namespace and the file defining the node may be different, so verification is necessary.
+        // The namespace and the file that defines the node may differ, so verify the path.
         if (linkedNode.identifier.location.path === namespaceScope.getContext().filepath) {
             result = namespaceScope.linkedNode.identifier;
         }
@@ -170,9 +194,12 @@ function findNamespaceTokenNearPosition(globalScope: SymbolGlobalScope, scopePat
     for (let i = namespaceScope.namespaceNodes.length - 1; i >= 0; i--) {
         // Take the token of the namespace closest to the position
         const next = namespaceScope.namespaceNodes[i].linkedToken;
-        result = result === undefined
-            ? next
-            : position.compareNearest(result.location.start, next.location.start) === -1 ? result : next;
+        result =
+            result === undefined
+                ? next
+                : position.compareNearest(result.location.start, next.location.start) === -1
+                  ? result
+                  : next;
     }
 
     return result;

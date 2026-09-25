@@ -1,13 +1,14 @@
-import {getActiveGlobalScope, tryResolveActiveScope, SymbolScope} from "./symbolScope";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-import {ResolvedType} from "./resolvedType";
-import {analyzerDiagnostic} from "./analyzerDiagnostic";
-import {assertTypeCast} from "./typeCast";
-import {TokenRange} from "../compiler_tokenizer/tokenRange";
-import {SymbolObjectHolder} from "./symbolObject";
-import {stringifyResolvedType} from "./symbolUtils";
-import {isFuncHeadConstructor, NodeFuncCall, NodeName} from "../compiler_parser/nodes";
-import * as assert from "node:assert";
+import {getActiveGlobalScope, tryResolveActiveScope, SymbolScope} from './symbolScope';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import {ResolvedType} from './resolvedType';
+import {analyzerDiagnostic} from './analyzerDiagnostic';
+import {assertTypeCast} from './typeCast';
+import {ConversionMode} from './typeConversion';
+import {TokenRange} from '../compiler_tokenizer/tokenRange';
+import {SymbolObjectHolder} from './symbolObject';
+import {Node_FuncCall, NodeName} from '../compiler_parser/nodeObject';
+import {stringifyResolvedType} from './symbolStringifier';
+import * as assert from 'node:assert';
 
 export function findConstructorOfType(resolvedType: ResolvedType | undefined): SymbolObjectHolder | undefined {
     if (resolvedType?.scopePath === undefined) {
@@ -20,8 +21,7 @@ export function findConstructorOfType(resolvedType: ResolvedType | undefined): S
     // |-- class 'TypeName' scope
     //     |-- constructor 'TypeName'
 
-    const activeTypeScope = tryResolveActiveScope(resolvedType.scopePath);
-    const classScope = activeTypeScope?.lookupScope(typeName);
+    const classScope = tryResolveActiveScope(resolvedType.scopePath)?.lookupScope(typeName);
     return classScope !== undefined ? classScope.lookupSymbol(typeName) : undefined;
 }
 
@@ -48,32 +48,33 @@ export function checkDefaultConstructorCall(
     if (calleeSymbol.isType() && calleeSymbol.isPrimitiveOrEnum()) {
         // A primitive type constructor only accepts one argument.
         if (callerArgTypes.length !== 1) {
-            const message = callerArgTypes.length === 0
-                ? `Primitive type '${constructorIdentifier.text}' requires an argument`
-                : `Too many arguments for type '${constructorIdentifier.text}'`;
+            const message =
+                callerArgTypes.length === 0
+                    ? `Primitive type '${constructorIdentifier.text}' requires an argument.`
+                    : `Too many arguments for type '${constructorIdentifier.text}'`;
 
             analyzerDiagnostic.error(callerRange.getBoundingLocation(), message);
         } else {
-            assertTypeCast(callerArgTypes[0], calleeConstructorType, callerRange);
+            assertTypeCast(callerArgTypes[0], calleeConstructorType, callerRange, ConversionMode.FunctionalCast);
         }
 
         return calleeConstructorType;
     } else {
-        // An object default constructor only accepts zero arguments.
-        if (callerArgTypes.length !== 0) {
-            const firstArgument = () => stringifyResolvedType(callerArgTypes[0]);
-            const message = callerArgTypes.length === 1
-                ? `Type '${constructorIdentifier.text}' does not have a constructor that accepts the argument '${firstArgument()}'`
-                : `Too many arguments for type '${constructorIdentifier.text}'`;
-
-            analyzerDiagnostic.error(callerRange.getBoundingLocation(), message);
+        // An object type call with one argument can be an explicit value cast, e.g., `Target(source)`.
+        if (callerArgTypes.length === 1) {
+            assertTypeCast(callerArgTypes[0], calleeConstructorType, callerRange, ConversionMode.FunctionalCast);
+        } else if (callerArgTypes.length !== 0) {
+            analyzerDiagnostic.error(
+                callerRange.getBoundingLocation(),
+                `Too many arguments for type '${constructorIdentifier.text}'`
+            );
         }
 
         return calleeConstructorType;
     }
 }
 
-export function assertDefaultSuperConstructorCall(scope: SymbolScope, funcCall: NodeFuncCall) {
+export function assertDefaultSuperConstructorCall(scope: SymbolScope, funcCall: Node_FuncCall) {
     assert(funcCall.identifier.text === 'super');
 
     const callerRange = funcCall.nodeRange;
@@ -81,7 +82,7 @@ export function assertDefaultSuperConstructorCall(scope: SymbolScope, funcCall: 
     const functionScope = scope.takeParentByNode([NodeName.Func]);
     const classScope = functionScope?.takeParentByNode([NodeName.Class]);
     const isInConstructor =
-        functionScope?.linkedNode?.nodeName === NodeName.Func && isFuncHeadConstructor(functionScope.linkedNode.head);
+        functionScope?.linkedNode?.nodeName === NodeName.Func && functionScope.linkedNode.head.tag === 'constructor';
     if (functionScope === undefined || classScope === undefined || isInConstructor === false) {
         analyzerDiagnostic.error(
             callerRange.getBoundingLocation(),
@@ -92,10 +93,7 @@ export function assertDefaultSuperConstructorCall(scope: SymbolScope, funcCall: 
 
     const classSymbol = classScope.parentScope?.lookupSymbol(classScope.key);
     if (!classSymbol?.isType()) {
-        analyzerDiagnostic.error(
-            callerRange.getBoundingLocation(),
-            `Class '${classScope.key}' does not exist.`
-        );
+        analyzerDiagnostic.error(callerRange.getBoundingLocation(), `Class '${classScope.key}' does not exist.`);
         return;
     }
 

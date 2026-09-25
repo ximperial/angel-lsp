@@ -1,24 +1,25 @@
-import {TokenIdentifier, TokenKind, TokenObject, TokenReserved} from "../compiler_tokenizer/tokenObject";
-import {numberTypeSet} from "../compiler_tokenizer/reservedWord";
-import {SymbolType} from "./symbolObject";
-import assert = require("node:assert");
-import {ResolvedType} from "./resolvedType";
-import {SymbolScope} from "./symbolScope";
+import {IdentifierToken, TokenKind, TokenObject, ReservedToken} from '../compiler_tokenizer/tokenObject';
+import {numberTypeSet} from '../compiler_tokenizer/reservedWord';
+import {TypeSymbol} from './symbolObject';
+import assert = require('node:assert');
+import {ResolvedType} from './resolvedType';
+import {SymbolScope} from './symbolScope';
 
-function createBuiltinType(virtualToken: TokenObject): SymbolType {
-    return SymbolType.create({
+function createBuiltinType(virtualToken: TokenObject): TypeSymbol {
+    return TypeSymbol.create({
         identifierToken: virtualToken, // The built-in type uses a virtual token
         scopePath: [],
         linkedNode: undefined,
-        membersScopePath: undefined,
+        membersScopePath: undefined
     });
 }
 
-const builtinNumberTypeMap: Map<string, SymbolType> = (() => {
-    const map = new Map<string, SymbolType>();
+const builtinNumberTypeMap: Map<string, TypeSymbol> = (() => {
+    const map = new Map<string, TypeSymbol>();
     for (const name of numberTypeSet) {
-        map.set(name, createBuiltinType(TokenReserved.createVirtual(name)));
+        map.set(name, createBuiltinType(ReservedToken.createVirtual(name)));
     }
+
     return map;
 })();
 
@@ -38,43 +39,55 @@ export const resolvedBuiltinFloat: ResolvedType = new ResolvedType(builtinFloatT
 export const builtinDoubleType = builtinNumberTypeMap.get('double')!;
 export const resolvedBuiltinDouble: ResolvedType = new ResolvedType(builtinDoubleType);
 
-function assignBuiltinNumberType(key: string): SymbolType {
+function assignBuiltinNumberType(key: string): TypeSymbol {
     const type = builtinNumberTypeMap.get(key);
-    if (type !== undefined) return type;
+    if (type !== undefined) {
+        return type;
+    }
+
     assert(false);
 }
 
-export const builtinBoolType: SymbolType = createBuiltinType(TokenReserved.createVirtual('bool'));
+export const builtinBoolType: TypeSymbol = createBuiltinType(ReservedToken.createVirtual('bool'));
 
 export const resolvedBuiltinBool: ResolvedType = new ResolvedType(builtinBoolType);
 
-export const builtinNullType: SymbolType = createBuiltinType(TokenReserved.createVirtual('null'));
-
-export const resolvedBuiltinNull: ResolvedType = new ResolvedType(builtinNullType);
-
-export const builtinNilType: SymbolType = createBuiltinType(TokenReserved.createVirtual('nil'));
+// Warcraft III's handle-null literal (UjAPI). Convertible only to handle types; see typeConversion.
+export const builtinNilType: TypeSymbol = createBuiltinType(ReservedToken.createVirtual('nil'));
 
 export const resolvedBuiltinNil: ResolvedType = new ResolvedType(builtinNilType);
 
-export const builtinVoidType: SymbolType = createBuiltinType(TokenReserved.createVirtual('void'));
+export const builtinVoidType: TypeSymbol = createBuiltinType(ReservedToken.createVirtual('void'));
 
-export const builtinAnyType: SymbolType = createBuiltinType(TokenReserved.createVirtual('?'));
+export const builtinAnyType: TypeSymbol = createBuiltinType(ReservedToken.createVirtual('?'));
 
-export const builtinAutoType: SymbolType = createBuiltinType(TokenReserved.createVirtual('auto'));
+export const builtinAutoType: TypeSymbol = createBuiltinType(ReservedToken.createVirtual('auto'));
 
-export function tryGetBuiltinType(token: TokenObject): SymbolType | undefined {
-    if (token.kind !== TokenKind.Reserved) return undefined;
+export const builtinNullType: TypeSymbol = createBuiltinType(ReservedToken.createVirtual('null'));
+
+export const resolvedBuiltinNull: ResolvedType = new ResolvedType(builtinNullType);
+
+export function tryGetBuiltinType(token: TokenObject): TypeSymbol | undefined {
+    if (token.kind !== TokenKind.Reserved) {
+        return undefined;
+    }
 
     const identifier = token.text;
-    if ((identifier === 'bool')) return builtinBoolType;
-    else if ((identifier === 'void')) return builtinVoidType;
-    else if (identifier === '?') return builtinAnyType;
-    else if (identifier === 'auto') return builtinAutoType;
-    else if (token.isReservedToken() && token.property.isNumber) return assignBuiltinNumberType(identifier);
+    if (identifier === 'bool') {
+        return builtinBoolType;
+    } else if (identifier === 'void') {
+        return builtinVoidType;
+    } else if (identifier === '?') {
+        return builtinAnyType;
+    } else if (identifier === 'auto') {
+        return builtinAutoType;
+    } else if (token.isReservedToken() && token.property.isNumber) {
+        return assignBuiltinNumberType(identifier);
+    }
 
     return undefined;
 }
 
-export const builtinThisToken = TokenIdentifier.createVirtual('this');
+export const builtinThisToken = IdentifierToken.createVirtual('this');
 
-export const builtinSetterValueToken = TokenIdentifier.createVirtual('value');
+export const builtinSetterValueToken = IdentifierToken.createVirtual('value');

@@ -1,6 +1,6 @@
-import {provideSignatureHelp} from "../../../src/services/signatureHelp";
-import {inspectFileContents, makeFileContentList} from "../../inspectorUtils";
-import {CaretMap} from "../caretMap";
+import {provideSignatureHelp} from '../../../src/services/signatureHelp';
+import {inspectFileContents, makeFileContentList} from '../../inspectorUtils';
+import {CaretMap} from '../caretMap';
 
 describe('signatureHelp/predefinedShadow', () => {
     it('prefers project overload details over predefined duplicates', () => {

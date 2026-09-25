@@ -1,37 +1,39 @@
-import {tryResolveActiveScope, SymbolScope} from "./symbolScope";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-import {ResolvedType} from "./resolvedType";
-import {TokenRange} from "../compiler_tokenizer/tokenRange";
-import {evaluateFunctionCall} from "./functionCall";
-import {analyzerDiagnostic} from "./analyzerDiagnostic";
-import {stringifyResolvedType, stringifyResolvedTypes} from "./symbolUtils";
-import assert = require("node:assert");
-import {checkTypeCast} from "./typeCast";
-import {resolvedBuiltinInt} from "./builtinType";
-import {canTypeConvert, normalizeType} from "./typeConversion";
-import {extendTokenLocation} from "../compiler_tokenizer/tokenUtils";
+import {tryResolveActiveScope, SymbolScope} from './symbolScope';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import {ResolvedType} from './resolvedType';
+import {TokenRange} from '../compiler_tokenizer/tokenRange';
+import {evaluateFunctionCall} from './functionCall';
+import {analyzerDiagnostic} from './analyzerDiagnostic';
+import assert = require('node:assert');
+import {checkTypeCast} from './typeCast';
+import {resolvedBuiltinInt} from './builtinType';
+import {canTypeConvert, normalizeType} from './typeConversion';
+import {extendTokenLocation} from '../compiler_tokenizer/tokenUtils';
+import {stringifyResolvedType, stringifyResolvedTypes} from './symbolStringifier';
 
-type OverloadedOperatorCallArgs = {
-    // For dual operators
-    callerOperator: TokenObject,
-    alias: string,
-    alias_r: string,
-    lhs: ResolvedType,
-    lhsRange: TokenRange,
-    rhs: ResolvedType,
-    rhsRange: TokenRange,
-    rhsArgNames?: undefined,
-} | {
-    // For the case where the alias_r is not defined.
-    callerOperator: TokenObject,
-    alias: string,
-    alias_r?: undefined, // The alias_r is not defined.
-    lhs: ResolvedType,
-    lhsRange: TokenRange,
-    rhs: ResolvedType | (ResolvedType | undefined)[], // If alias_r is not defined, the rhs can be an array.
-    rhsRange: TokenRange,
-    rhsArgNames?: (TokenObject | undefined)[] // Support for named arguments.
-}
+type OverloadedOperatorCallArgs =
+    | {
+          // For dual operators
+          callerOperator: TokenObject;
+          alias: string;
+          alias_r: string;
+          lhs: ResolvedType;
+          lhsRange: TokenRange;
+          rhs: ResolvedType;
+          rhsRange: TokenRange;
+          rhsArgNames?: undefined;
+      }
+    | {
+          // For the case where the alias_r is not defined.
+          callerOperator: TokenObject;
+          alias: string;
+          alias_r?: undefined; // The alias_r is not defined.
+          lhs: ResolvedType;
+          lhsRange: TokenRange;
+          rhs: ResolvedType | (ResolvedType | undefined)[]; // If alias_r is not defined, the rhs can be an array.
+          rhsRange: TokenRange;
+          rhsArgNames?: (TokenObject | undefined)[]; // Support for named arguments.
+      };
 
 /**
  * Check if the overloaded operator call is valid.
@@ -58,9 +60,13 @@ export function evaluateNumberOperatorCall(lhs: ResolvedType, rhs: ResolvedType)
     }
 
     if (lhs.typeOrFunc.isNumberType()) {
-        if (checkTypeCast(rhs, lhs)) return lhs;
+        if (checkTypeCast(rhs, lhs)) {
+            return lhs;
+        }
     } else if (rhs.typeOrFunc.isNumberType()) {
-        if (checkTypeCast(lhs, rhs)) return rhs;
+        if (checkTypeCast(lhs, rhs)) {
+            return rhs;
+        }
     }
 
     return undefined;
@@ -71,8 +77,14 @@ export function evaluateNumberOperatorCall(lhs: ResolvedType, rhs: ResolvedType)
  */
 export function canComparisonOperatorCall(lhs: ResolvedType, rhs: ResolvedType): ResolvedType | undefined {
     // FIXME: Probably it is wrong.
-    if (checkTypeCast(lhs, rhs)) return lhs;
-    if (checkTypeCast(rhs, lhs)) return rhs;
+    if (checkTypeCast(lhs, rhs)) {
+        return lhs;
+    }
+
+    if (checkTypeCast(rhs, lhs)) {
+        return rhs;
+    }
+
     return undefined;
 }
 
@@ -111,7 +123,7 @@ function checkOverloadedOperatorCallInternal(args: OverloadedOperatorCallArgs): 
     });
 
     if (hasMismatchReason(rhsResult)) {
-        handleMismatchError(args, lhsResult, rhsResult); // FIXME: Also consider the rhs reason.
+        handleMismatchError(args, lhsResult, rhsResult);
         return undefined;
     } else {
         return rhsResult;
@@ -123,25 +135,31 @@ function handleMismatchError(args: OverloadedOperatorCallArgs, lhsReason: Mismat
 
     const operatorLocation = extendTokenLocation(callerOperator, 1, 1);
 
-    // FIXME: Consider the rhs reason.
+    if (rhsReason !== undefined && alias_r !== undefined && Array.isArray(rhs) === false) {
+        analyzerDiagnostic.error(
+            operatorLocation,
+            `Operator call has no matching overload. ${formatMismatchReason(alias, lhs, rhs, lhsReason)} ${formatMismatchReason(alias_r, rhs, lhs, rhsReason)}`
+        );
+        return;
+    }
 
     if (lhsReason.reason === MismatchKind.MissingAliasOperator) {
         if (lhsReason.foundButNotFunction) {
             analyzerDiagnostic.error(
                 operatorLocation,
-                `The operator '${alias}' in ${stringifyResolvedType(lhs)} is found, but it is not a function.`
+                `Operator '${alias}' exists on ${stringifyResolvedType(lhs)}, but it is not a function.`
             );
             return;
         } else if (alias_r !== undefined) {
             analyzerDiagnostic.error(
                 operatorLocation,
-                `The operator '${stringifyResolvedType(lhs)}::${alias}' or '${stringifyResolvedType(rhs)}::${alias_r}' is not defined.`
+                `Neither operator '${stringifyResolvedType(lhs)}::${alias}' nor '${stringifyResolvedType(rhs)}::${alias_r}' is defined.`
             );
             return;
         } else {
             analyzerDiagnostic.error(
                 operatorLocation,
-                `The operator '${alias}' in ${stringifyResolvedType(lhs)} is not defined.`
+                `Operator '${alias}' is not defined for ${stringifyResolvedType(lhs)}.`
             );
             return;
         }
@@ -149,16 +167,39 @@ function handleMismatchError(args: OverloadedOperatorCallArgs, lhsReason: Mismat
         const rhsText = Array.isArray(rhs) ? stringifyResolvedTypes(rhs) : stringifyResolvedType(rhs);
         analyzerDiagnostic.error(
             operatorLocation,
-            `The operator '${alias}' in ${stringifyResolvedType(lhs)} does not match the argument types ${rhsText}.`
+            `Operator '${alias}' on ${stringifyResolvedType(lhs)} does not accept argument type(s) ${rhsText}.`
         );
         return;
     } else if (lhsReason.reason === MismatchKind.MismatchIndexedPropertyAccessor) {
         const rhsText = Array.isArray(rhs) ? stringifyResolvedTypes(rhs) : stringifyResolvedType(rhs);
         analyzerDiagnostic.error(
             args.rhsRange.getBoundingLocation(),
-            `'${lhs.accessSourceToken?.text ?? '[ ]'}' expects one integer argument, but got '${rhsText}'.`
+            `'${lhs.attachedAccessSourceToken?.text ?? '[ ]'}' expects one integer argument, but got '${rhsText}'.`
         );
         return;
+    }
+
+    assert(false);
+}
+
+function formatMismatchReason(
+    alias: string,
+    lhs: ResolvedType,
+    rhs: ResolvedType | (ResolvedType | undefined)[],
+    reason: MismatchReason
+) {
+    if (reason.reason === MismatchKind.MissingAliasOperator) {
+        if (reason.foundButNotFunction) {
+            return `Operator '${alias}' exists on ${stringifyResolvedType(lhs)}, but it is not a function.`;
+        }
+
+        return `Operator '${alias}' is not defined for ${stringifyResolvedType(lhs)}.`;
+    } else if (reason.reason === MismatchKind.MismatchOverload) {
+        const rhsText = Array.isArray(rhs) ? stringifyResolvedTypes(rhs) : stringifyResolvedType(rhs);
+        return `Operator '${alias}' on ${stringifyResolvedType(lhs)} does not accept argument type(s) ${rhsText}.`;
+    } else if (reason.reason === MismatchKind.MismatchIndexedPropertyAccessor) {
+        const rhsText = Array.isArray(rhs) ? stringifyResolvedTypes(rhs) : stringifyResolvedType(rhs);
+        return `'${lhs.attachedAccessSourceToken?.text ?? '[ ]'}' expects one integer argument, but got '${rhsText}'.`;
     }
 
     assert(false);
@@ -167,30 +208,36 @@ function handleMismatchError(args: OverloadedOperatorCallArgs, lhsReason: Mismat
 enum MismatchKind {
     MissingAliasOperator = 'MissingAliasOperator',
     MismatchOverload = 'MismatchOverload',
-    MismatchIndexedPropertyAccessor = 'MismatchIndexedPropertyAccessor',
+    MismatchIndexedPropertyAccessor = 'MismatchIndexedPropertyAccessor'
 }
 
-type MismatchReason = {
-    reason: MismatchKind.MissingAliasOperator,
-    foundButNotFunction?: boolean
-} | {
-    reason: MismatchKind.MismatchOverload,
-} | {
-    reason: MismatchKind.MismatchIndexedPropertyAccessor,
-}
+type MismatchReason =
+    | {
+          reason: MismatchKind.MissingAliasOperator;
+          foundButNotFunction?: boolean;
+      }
+    | {
+          reason: MismatchKind.MismatchOverload;
+      }
+    | {
+          reason: MismatchKind.MismatchIndexedPropertyAccessor;
+      };
 
 function hasMismatchReason(reason: ResolvedType | MismatchReason | undefined): reason is MismatchReason {
-    if (reason === undefined) return false;
+    if (reason === undefined) {
+        return false;
+    }
+
     return 'reason' in reason;
 }
 
 interface LhsOperatorCallArgs {
-    callerOperator: TokenObject,
-    alias: string,
-    lhs: ResolvedType,
-    rhs: ResolvedType | (ResolvedType | undefined)[],
-    rhsRange: TokenRange,
-    rhsArgNames: (TokenObject | undefined)[] | undefined
+    callerOperator: TokenObject;
+    alias: string;
+    lhs: ResolvedType;
+    rhs: ResolvedType | (ResolvedType | undefined)[];
+    rhsRange: TokenRange;
+    rhsArgNames: (TokenObject | undefined)[] | undefined;
 }
 
 function checkLhsOverloadedOperatorCall(args: LhsOperatorCallArgs): ResolvedType | undefined | MismatchReason {
@@ -198,10 +245,10 @@ function checkLhsOverloadedOperatorCall(args: LhsOperatorCallArgs): ResolvedType
 
     const rhsArgs = Array.isArray(args.rhs) ? args.rhs : [args.rhs];
 
-    if (lhs.accessSourceVariable?.isIndexedPropertyAccessor) {
+    if (lhs.attachedAccessSourceVariable?.isIndexedPropertyAccessor) {
         if (rhsArgs.length == 1 && canTypeConvert(rhsArgs[0], resolvedBuiltinInt)) {
             // e.g., `myNotebook[123]` where `class MyNotebook { string get_texts(int idx) property { ... } }`
-            return lhs.accessSourceVariable.type;
+            return lhs.attachedAccessSourceVariable.type;
         }
 
         return {reason: MismatchKind.MismatchIndexedPropertyAccessor};
@@ -215,8 +262,7 @@ function checkLhsOverloadedOperatorCall(args: LhsOperatorCallArgs): ResolvedType
         return {reason: MismatchKind.MissingAliasOperator};
     }
 
-    const lhsScope = tryResolveActiveScope(lhs.scopePath);
-    const aliasFunction = lhsScope?.lookupScope(lhs.identifierText)?.lookupSymbol(alias);
+    const aliasFunction = tryResolveActiveScope(lhs.scopePath)?.lookupScope(lhs.identifierText)?.lookupSymbol(alias);
     if (aliasFunction === undefined) {
         return {reason: MismatchKind.MissingAliasOperator};
     } else if (aliasFunction.isFunctionHolder() === false) {
@@ -235,8 +281,9 @@ function checkLhsOverloadedOperatorCall(args: LhsOperatorCallArgs): ResolvedType
         callerIdentifier: callerOperator,
         callerRange: new TokenRange(callerOperator, callerOperator),
         callerArgs: callerArgs,
+        callerInstanceType: lhs,
         calleeFuncHolder: aliasFunction,
-        calleeTemplateTranslator: lhs.templateTranslator // FIXME?
+        calleeTemplateMapping: lhs.templateMapping // FIXME?
     });
 
     if (evaluated.bestMatching === undefined) {
@@ -250,7 +297,18 @@ function checkLhsOverloadedOperatorCall(args: LhsOperatorCallArgs): ResolvedType
 }
 
 const widerNumberTable = [
-    'double', 'float', 'int64', 'uint64', 'int32', 'uint32', 'int', 'uint', 'int16', 'uint16', 'int8', 'uint8'
+    'double',
+    'float',
+    'int64',
+    'uint64',
+    'int32',
+    'uint32',
+    'int',
+    'uint',
+    'int16',
+    'uint16',
+    'int8',
+    'uint8'
 ];
 
 function takeWiderNumberType(lhs: ResolvedType, rhs: ResolvedType): ResolvedType {
@@ -262,10 +320,14 @@ function takeWiderNumberType(lhs: ResolvedType, rhs: ResolvedType): ResolvedType
 
     // Take the wider number type.
     for (const type of widerNumberTable) {
-        if (lhs.identifierText === type) return lhs;
-        if (rhs.identifierText === type) return rhs;
+        if (lhs.identifierText === type) {
+            return lhs;
+        }
+
+        if (rhs.identifierText === type) {
+            return rhs;
+        }
     }
 
     assert(false);
 }
-

@@ -1,10 +1,10 @@
-import * as lsp from "vscode-languageserver";
+import * as lsp from 'vscode-languageserver';
 
 let s_currentDiagnostics: lsp.Diagnostic[] = [];
 
 function beginSession(): void {
     if (s_currentDiagnostics.length > 0) {
-        console.error("diagnostic.endSession() was not called before diagnostic.beginSession()");
+        console.error('diagnostic.endSession() was not called before diagnostic.beginSession()');
     }
 
     s_currentDiagnostics = [];
@@ -21,7 +21,7 @@ function pushDiagnostic(range: lsp.Range, message: string, severity: lsp.Diagnos
         range: structuredClone(range),
         message: message,
         severity: severity,
-        source: "AngelScript",
+        source: 'AngelScript'
     });
 }
 
@@ -29,8 +29,19 @@ function error(range: lsp.Range, message: string): void {
     pushDiagnostic(range, message, lsp.DiagnosticSeverity.Error);
 }
 
+function unnecessary(range: lsp.Range, message: string): void {
+    s_currentDiagnostics.push({
+        range: structuredClone(range),
+        message: message,
+        severity: lsp.DiagnosticSeverity.Hint,
+        tags: [lsp.DiagnosticTag.Unnecessary],
+        source: 'AngelScript'
+    });
+}
+
 export const diagnostic = {
     beginSession: beginSession,
     endSession: endSession,
     error: error,
+    unnecessary: unnecessary
 } as const;
