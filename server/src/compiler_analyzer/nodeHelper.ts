@@ -1,0 +1,44 @@
+import {
+    AccessModifierToken,
+    HandleAndConstTokenPair,
+    Node_Func,
+    Node_InterfaceMethod
+} from '../compiler_parser/nodeObject';
+
+export enum AccessRestriction {
+    Private = 'private',
+    Protected = 'protected'
+}
+
+export function getAccessRestriction(accessModifier: AccessModifierToken | undefined): AccessRestriction | undefined {
+    if (accessModifier === undefined) {
+        return undefined;
+    }
+
+    if (accessModifier.text === 'private') {
+        return AccessRestriction.Private;
+    }
+
+    if (accessModifier.text === 'protected') {
+        return AccessRestriction.Protected;
+    }
+
+    return undefined;
+}
+
+export enum HandleModifier {
+    Handle = 'Handle',
+    ConstHandle = 'ConstHandle'
+}
+
+export function getHandleModifier(handleAndConst: HandleAndConstTokenPair | undefined): HandleModifier | undefined {
+    if (handleAndConst === undefined) {
+        return undefined;
+    }
+
+    return handleAndConst.constToken === undefined ? HandleModifier.Handle : HandleModifier.ConstHandle;
+}
+
+export function hasFunctionAttribute(node: Node_Func | Node_InterfaceMethod, text: string): boolean {
+    return node.funcAttrTokens?.some(token => token.text === text) === true;
+}

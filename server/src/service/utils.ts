@@ -1,13 +1,19 @@
-import {SymbolGlobalScope, SymbolScope} from "../compiler_analyzer/symbolScope";
-import {TextLocation, TextPosition} from "../compiler_tokenizer/textLocation";
-import {ScopeRegionInfo} from "../compiler_analyzer/info";
+import {SymbolGlobalScope, SymbolScope} from '../compiler_analyzer/symbolScope';
+import {TextLocation, TextPosition} from '../compiler_tokenizer/textLocation';
+import {ScopeRegionMarker} from '../compiler_analyzer/marker';
 
-export function takeNarrowestScopeRegion(lhs: ScopeRegionInfo, rhs: ScopeRegionInfo): ScopeRegionInfo {
+export function takeNarrowestScopeRegion(lhs: ScopeRegionMarker, rhs: ScopeRegionMarker): ScopeRegionMarker {
     const lhsDiff = lhs.boundingLocation.getDifference();
     const rhsDiff = rhs.boundingLocation.getDifference();
 
-    if (lhsDiff.line < rhsDiff.line) return lhs;
-    if (lhsDiff.line > rhsDiff.line) return rhs;
+    if (lhsDiff.line < rhsDiff.line) {
+        return lhs;
+    }
+
+    if (lhsDiff.line > rhsDiff.line) {
+        return rhs;
+    }
+
     return lhsDiff.character < rhsDiff.character ? lhs : rhs;
 }
 
@@ -22,20 +28,20 @@ interface ScopeAndLocation {
 export function findScopeContainingPosition(globalScope: SymbolGlobalScope, caret: TextPosition): ScopeAndLocation {
     const path = globalScope.getContext().filepath;
 
-    let found: ScopeRegionInfo | undefined = undefined;
-    for (const info of globalScope.info.scopeRegion) {
+    let found: ScopeRegionMarker | undefined = undefined;
+    for (const info of globalScope.markers.scopeRegion) {
         const location = info.boundingLocation;
-        if (location.path !== path) continue;
+        if (location.path !== path) {
+            continue;
+        }
 
         if (location.positionInRange(caret)) {
-            found = found === undefined
-                ? info
-                : takeNarrowestScopeRegion(found, info);
+            found = found === undefined ? info : takeNarrowestScopeRegion(found, info);
         }
     }
 
     return {
         scope: found?.targetScope ?? globalScope,
-        location: found?.boundingLocation,
+        location: found?.boundingLocation
     };
 }

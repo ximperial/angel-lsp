@@ -1,19 +1,29 @@
-import {makeCaretListAndContent} from "../caretUtils";
-import {provideCompletion} from "../../../src/services/completion";
-import {
-    FileContents,
-    makeFileContentList,
-    inspectFileContents,
-} from "../../inspectorUtils";
-import {CaretMap} from "../caretMap";
+import {CompletionItem} from 'vscode-languageserver/node';
+import {provideCompletion} from '../../../src/services/completion';
+import {copyGlobalSettings, resetGlobalSettings} from '../../../src/core/settings';
+import {FileContents, makeFileContentList, inspectFileContents} from '../../inspectorUtils';
+import {CaretMap} from '../caretMap';
+import {afterEach, beforeEach} from 'mocha';
 
 function concatIndexAndItem(item: string, index: number) {
     return `${index}:${item}`;
 }
 
+export function useCompletionWithoutBuiltinKeywords() {
+    beforeEach(() => {
+        const settings = copyGlobalSettings();
+        settings.completion.builtinKeywords = false;
+        settings.completion.snippets = false;
+        resetGlobalSettings(settings);
+    });
+
+    afterEach(() => {
+        resetGlobalSettings(undefined);
+    });
+}
+
 export function testCompletion(fileContents: FileContents, ...expectedList: string[][]) {
     const fileContentList = makeFileContentList(fileContents);
-    const lastContent = fileContentList.at(-1)!.content;
 
     const caretMap = new CaretMap();
     caretMap.processFiles(fileContentList);
@@ -22,25 +32,33 @@ export function testCompletion(fileContents: FileContents, ...expectedList: stri
         throw new Error(`Expected ${expectedList.length} caret positions, but got ${caretMap.length}`);
     }
 
-    it(`[completion] ${lastContent}`, () => {
-        const inspector = inspectFileContents(fileContentList);
+    const inspector = inspectFileContents(fileContentList);
 
-        // Iterate through each caret position and check if the completions are as expected.
-        for (let i = 0; i < caretMap.length; i++) {
-            const target = caretMap.get(i);
-            const globalScope = inspector.getRecord(target.uri).analyzerScope.globalScope;
+    // Iterate through each caret position and check if the completions are as expected.
+    for (let i = 0; i < caretMap.length; i++) {
+        const target = caretMap.get(i);
+        const record = inspector.getRecord(target.uri);
+        const globalScope = record.analyzerScope.globalScope;
 
-            const expected =
-                expectedList[i]
-                    .sort().map(concatIndexAndItem).join(", ");
+        const expected = expectedList[i].sort().map(concatIndexAndItem).join(', ');
 
-            const completions =
-                provideCompletion(globalScope, target.position).map(c => c.item.label)
-                    .sort().map(concatIndexAndItem).join(", ");
+        const completions = provideCompletion(
+            record.rawTokens,
+            record.preprocessedOutput.preprocessedTokens,
+            record.preprocessedOutput.definedSymbols,
+            record.ast,
+            globalScope,
+            target.position
+        )
+            .map(c => c.item.label)
+            .sort()
+            .map(concatIndexAndItem)
+            .join(', ');
 
-            if (completions !== expected) {
-                throw new Error(`Incorrect completion.\nexpected: [${expected}]\nactual  : [${completions}]`);
-            }
+        if (completions !== expected) {
+            throw new Error(
+                `Incorrect completion on caret: ${i}.\nexpected: [${expected}]\nactual  : [${completions}]`
+            );
         }
-    });
+    }
 }

@@ -3,37 +3,39 @@ import {
     ScopePath,
     SymbolObject,
     SymbolObjectHolder,
-    SymbolType,
+    TypeSymbol,
     TypeDefinitionNode
-} from "./symbolObject";
+} from './symbolObject';
 import {
-    NodeClass,
-    NodeDoWhile,
-    NodeEnum,
-    NodeFor,
-    NodeForEach,
-    NodeFunc,
-    NodeIf,
-    NodeInterface,
-    NodeLambda,
-    NodeName, NodeNamespace,
-    NodeStatBlock,
-    NodeTry,
-    NodeUsing,
-    NodeVirtualProp,
-    NodeWhile
-} from "../compiler_parser/nodes";
+    Node_Class,
+    Node_DoWhile,
+    Node_Enum,
+    Node_For,
+    Node_ForEach,
+    Node_Func,
+    Node_If,
+    Node_Interface,
+    Node_Lambda,
+    NodeName,
+    Node_Namespace,
+    Node_StatBlock,
+    Node_Try,
+    Node_Using,
+    Node_VirtualProp,
+    Node_While
+} from '../compiler_parser/nodeObject';
 import {
-    AutoTypeResolutionInfo,
-    FunctionCallInfo,
-    AutocompleteInstanceMemberInfo,
-    AutocompleteNamespaceAccessInfo,
-    ScopeRegionInfo, ReferenceInfo
-} from "./info";
-import {getGlobalSettings} from "../core/settings";
-import {analyzerDiagnostic} from "./analyzerDiagnostic";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-import assert = require("node:assert");
+    AutoTypeResolutionMarker,
+    FunctionCallMarker,
+    InstanceAccessMarker,
+    ScopeAccessMarker,
+    ScopeRegionMarker,
+    ReferenceMarker
+} from './marker';
+import {getGlobalSettings} from '../core/settings';
+import {analyzerDiagnostic} from './analyzerDiagnostic';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import assert = require('node:assert');
 
 export type ScopeTable = Map<string, SymbolScope>;
 
@@ -43,20 +45,20 @@ export type SymbolTable = Map<string, SymbolObjectHolder>;
 
 export type ReadonlySymbolTable = ReadonlyMap<string, SymbolObjectHolder>;
 
-interface DetailScopeInformation {
-    reference: ReferenceInfo[];
-    scopeRegion: ScopeRegionInfo[];
-    autocompleteInstanceMember: AutocompleteInstanceMemberInfo[];
-    autocompleteNamespaceAccess: AutocompleteNamespaceAccessInfo[];
-    functionCall: FunctionCallInfo[];
-    autoTypeResolution: AutoTypeResolutionInfo[];
+interface AnalyzeMarkers {
+    reference: ReferenceMarker[];
+    scopeRegion: ScopeRegionMarker[];
+    instanceAccess: InstanceAccessMarker[];
+    scopeAccess: ScopeAccessMarker[];
+    functionCall: FunctionCallMarker[];
+    autoTypeResolution: AutoTypeResolutionMarker[];
 }
 
 interface GlobalScopeContext {
     filepath: string;
-    builtinStringType: SymbolType | undefined;
+    builtinStringType: TypeSymbol | undefined;
     enumScopeList: SymbolScope[];
-    info: DetailScopeInformation;
+    markers: AnalyzeMarkers;
 }
 
 function createGlobalScopeContext(): GlobalScopeContext {
@@ -64,40 +66,40 @@ function createGlobalScopeContext(): GlobalScopeContext {
         filepath: '',
         builtinStringType: undefined,
         enumScopeList: [],
-        info: {
+        markers: {
             reference: [],
             scopeRegion: [],
-            autocompleteInstanceMember: [],
-            autocompleteNamespaceAccess: [],
+            instanceAccess: [],
+            scopeAccess: [],
             functionCall: [],
-            autoTypeResolution: [],
+            autoTypeResolution: []
         }
     };
 }
 
 /**
  * Nodes that can have a scope containing symbols.
- * Note: It does not contain NodeNamespace because a scope can have multiple namespaces.
+ * Note: It does not contain Node_Namespace because a scope can have multiple namespaces.
  */
 export type ScopeLinkedNode =
-    NodeEnum
-    | NodeClass
-    | NodeVirtualProp
-    | NodeInterface
-    | NodeFunc
-    | NodeLambda
+    | Node_Enum
+    | Node_Class
+    | Node_VirtualProp
+    | Node_Interface
+    | Node_Func
+    | Node_Lambda
 
     // Statement nodes
-    | NodeStatBlock
-    | NodeFor
-    | NodeForEach
-    | NodeWhile
-    | NodeDoWhile
-    | NodeIf
-    | NodeTry;
+    | Node_StatBlock
+    | Node_For
+    | Node_ForEach
+    | Node_While
+    | Node_DoWhile
+    | Node_If
+    | Node_Try;
 
 interface ScopeLinkedNamespaceNode {
-    node: NodeNamespace;
+    node: Node_Namespace;
 
     // Since the namespace node can have multiple identifier tokens,
     // we need to remember the token in the node that is linked to the scope.
@@ -106,7 +108,7 @@ interface ScopeLinkedNamespaceNode {
 
 interface ScopeUsingNamespace {
     scopePath: ScopePath;
-    linkedNodes: NodeUsing[];
+    linkedNodes: Node_Using[];
 }
 
 /**
@@ -140,7 +142,7 @@ export class SymbolScope {
         // The key of this scope. It is the identifier of the class, function, or block.
         public readonly key: string,
         // A node associated with this scope
-        private _linkedNode: ScopeLinkedNode | undefined,
+        private _linkedNode: ScopeLinkedNode | undefined
     ) {
         assert(parentScope !== undefined || this instanceof SymbolGlobalScope);
 
@@ -184,7 +186,7 @@ export class SymbolScope {
     public isFunctionHolderScope(): boolean {
         // ...
         //   |-- Function holder scope (with no node)
-        //       |-- The function scope for one of the overloads (with NodeFunc)
+        //       |-- The function scope for one of the overloads (with Node_Func)
         //           |-- ...
         // FIXME: What happens if the namespace and function name are the same?
         return this._childScopeTable.values().next().value?.isFunctionScope() === true;
@@ -219,23 +221,33 @@ export class SymbolScope {
      * Find the parent scope (including itself) that satisfies the condition.
      */
     public takeParentBy(filter: (scope: SymbolScope) => boolean): SymbolScope | undefined {
-        if (filter(this)) return this;
-        if (this.parentScope === undefined) return undefined;
+        if (filter(this)) {
+            return this;
+        }
+
+        if (this.parentScope === undefined) {
+            return undefined;
+        }
+
         return this.parentScope.takeParentBy(filter);
     }
 
     public takeParentByNode(nodeCandidates: NodeName[]): SymbolScope | undefined {
-        return this.takeParentBy(scope => scope.linkedNode !== undefined && nodeCandidates.includes(scope.linkedNode.nodeName));
+        return this.takeParentBy(
+            scope => scope.linkedNode !== undefined && nodeCandidates.includes(scope.linkedNode.nodeName)
+        );
     }
 
     public getGlobalScope(): SymbolGlobalScope {
-        if (this.isGlobalScope()) return this;
+        if (this.isGlobalScope()) {
+            return this;
+        }
 
         assert(this.parentScope !== undefined);
         return this.parentScope.getGlobalScope();
     }
 
-    public pushUsingNamespace(node: NodeUsing) {
+    public pushUsingNamespace(node: Node_Using) {
         const scopePath: ScopePath = node.namespaceList.map(ns => ns.text);
 
         const alreadyExists = this._usingNamespaces.find(exist => isScopePathEquals(exist.scopePath, scopePath));
@@ -254,7 +266,7 @@ export class SymbolScope {
             : [...this._parentScope.getUsingNamespacesWithParent(), ...this._usingNamespaces];
     }
 
-    public pushNamespaceNode(node: NodeNamespace, linkedToken: TokenObject) {
+    public pushNamespaceNode(node: Node_Namespace, linkedToken: TokenObject) {
         this._namespaceNodes.push({node, linkedToken});
     }
 
@@ -271,7 +283,10 @@ export class SymbolScope {
     public insertScope(identifier: string, linkedNode: ScopeLinkedNode | undefined): SymbolScope {
         const alreadyExists = this._childScopeTable.get(identifier);
         if (alreadyExists !== undefined) {
-            if (alreadyExists.linkedNode === undefined) alreadyExists.setLinkedNode(linkedNode);
+            if (alreadyExists.linkedNode === undefined) {
+                alreadyExists.setLinkedNode(linkedNode);
+            }
+
             return alreadyExists;
         }
 
@@ -283,12 +298,18 @@ export class SymbolScope {
     public insertScopeAndCheck(identifier: TokenObject, linkedNode: ScopeLinkedNode | undefined): SymbolScope {
         const scope = this.insertScope(identifier.text, linkedNode);
         if (linkedNode !== undefined && linkedNode !== scope.linkedNode) {
-            if (scope.linkedNode !== undefined && isPredefinedShadowedByProjectSymbol(scope.linkedNode.nodeRange.path, linkedNode.nodeRange.path)) {
+            if (
+                scope.linkedNode !== undefined &&
+                isPredefinedShadowedByProjectSymbol(scope.linkedNode.nodeRange.path, linkedNode.nodeRange.path)
+            ) {
                 scope.replaceLinkedNode(linkedNode);
                 return scope;
             }
 
-            if (scope.linkedNode !== undefined && isPredefinedShadowedByProjectSymbol(linkedNode.nodeRange.path, scope.linkedNode.nodeRange.path)) {
+            if (
+                scope.linkedNode !== undefined &&
+                isPredefinedShadowedByProjectSymbol(linkedNode.nodeRange.path, scope.linkedNode.nodeRange.path)
+            ) {
                 return scope;
             }
 
@@ -301,7 +322,10 @@ export class SymbolScope {
 
     public lookupScopeWithParent(identifier: string): SymbolScope | undefined {
         const child = this._childScopeTable.get(identifier);
-        if (child !== undefined) return child;
+        if (child !== undefined) {
+            return child;
+        }
+
         return this.parentScope === undefined ? undefined : this.parentScope.lookupScopeWithParent(identifier);
     }
 
@@ -310,9 +334,15 @@ export class SymbolScope {
     }
 
     public resolveRelativeScope(path: ScopePath): SymbolScope | undefined {
-        if (path.length === 0) return this;
+        if (path.length === 0) {
+            return this;
+        }
+
         const child = this._childScopeTable.get(path[0]);
-        if (child === undefined) return undefined;
+        if (child === undefined) {
+            return undefined;
+        }
+
         return child.resolveRelativeScope(path.slice(1));
     }
 
@@ -327,11 +357,14 @@ export class SymbolScope {
         const incomingHolder = symbol.toHolder();
         if (alreadyExists === undefined) {
             this._symbolTable.set(identifier, incomingHolder);
+            registerBuiltinTypeIfNeeded(symbol);
             return undefined;
         }
 
+        // as.predefined may redeclare a symbol that the project also defines; the project's one wins.
         if (canPreferProjectSymbolOverPredefined(alreadyExists, incomingHolder)) {
             this._symbolTable.set(identifier, incomingHolder);
+            registerBuiltinTypeIfNeeded(symbol);
             return undefined;
         }
 
@@ -340,7 +373,16 @@ export class SymbolScope {
         }
 
         const canOverload = symbol.isFunction() && alreadyExists.isFunctionHolder();
-        if (canOverload === false) return alreadyExists;
+        if (canOverload === false) {
+            return alreadyExists;
+        }
+
+        // The same declaration can arrive twice, e.g. through an explicit #include and through
+        // implicitMutualInclusion. It is one function, not an ambiguous overload.
+        const location = symbol.identifierToken.location;
+        if (alreadyExists.toList().some(existing => existing.identifierToken.location.equals(location))) {
+            return undefined;
+        }
 
         // Functions can be added as overloads
         alreadyExists.pushOverload(symbol);
@@ -366,8 +408,20 @@ export class SymbolScope {
 
     public lookupSymbolWithParent(identifier: string): SymbolObjectHolder | undefined {
         const symbol = this.lookupSymbol(identifier);
-        if (symbol !== undefined) return symbol;
+        if (symbol !== undefined) {
+            return symbol;
+        }
+
         return this.parentScope === undefined ? undefined : this.parentScope.lookupSymbolWithParent(identifier);
+    }
+
+    public lookupSymbolAndScopeWithParent(identifier: string): SymbolAndScope | undefined {
+        const symbol = this.lookupSymbol(identifier);
+        if (symbol !== undefined) {
+            return {symbol, scope: this};
+        }
+
+        return this.parentScope === undefined ? undefined : this.parentScope.lookupSymbolAndScopeWithParent(identifier);
     }
 
     protected includeExternalScope_internal(externalScope: SymbolScope, externalFilepath: string) {
@@ -382,9 +436,11 @@ export class SymbolScope {
 
         // Copy using namespaces from the external scope.
         for (const usingNamespace of externalScope._usingNamespaces) {
-            const filteredNodes = usingNamespace.linkedNodes.filter(
-                node => node.namespaceList.some(ns => ns.location.path === externalFilepath));
-            if (filteredNodes.length > 0 &&
+            const filteredNodes = usingNamespace.linkedNodes.filter(node =>
+                node.namespaceList.some(ns => ns.location.path === externalFilepath)
+            );
+            if (
+                filteredNodes.length > 0 &&
                 !this._usingNamespaces.some(elem => isScopePathEquals(elem.scopePath, usingNamespace.scopePath))
             ) {
                 this._usingNamespaces.push({
@@ -405,7 +461,8 @@ export class SymbolScope {
                 if (canInsertNode && otherChild.isFunctionScope()) {
                     this.insertScope(key, otherChild.linkedNode);
                 }
-            } else if (otherChild._symbolTable.size > 0 ||
+            } else if (
+                otherChild._symbolTable.size > 0 ||
                 otherChild._childScopeTable.size > 0 ||
                 otherChild._usingNamespaces.length > 0
             ) {
@@ -413,7 +470,6 @@ export class SymbolScope {
                 thisChild.includeExternalScope_internal(otherChild, externalFilepath);
             }
         }
-
     }
 }
 
@@ -443,10 +499,9 @@ export class SymbolGlobalScope extends SymbolScope {
     }
 
     /**
-     * Cache information in the context of the file
+     * Cache enum scopes in the context of the file.
      */
-    public commitContext() {
-        this._context.builtinStringType = findBuiltinStringType(this);
+    public cacheEnumScopeList() {
         this._context.enumScopeList = collectEnumScopeList(this);
     }
 
@@ -459,39 +514,26 @@ export class SymbolGlobalScope extends SymbolScope {
         this.includeExternalScope_internal(externalScope, externalFilepath);
     }
 
-    public get info(): Readonly<DetailScopeInformation> {
-        return this._context.info;
+    public get markers(): Readonly<AnalyzeMarkers> {
+        return this._context.markers;
     }
 
-    public pushReference(info: ReferenceInfo) {
-        this._context.info.reference.push(info);
+    public pushReference(info: ReferenceMarker) {
+        this._context.markers.reference.push(info);
     }
 
     public resolveScope(path: ScopePath): SymbolScope | undefined {
         return super.resolveRelativeScope(path);
     }
+
+    public registerBuiltinStringType(type: TypeSymbol) {
+        assert(this._context.builtinStringType === undefined);
+        this._context.builtinStringType = type;
+    }
 }
 
 function errorAlreadyDeclared(token: TokenObject) {
-    analyzerDiagnostic.error(
-        token.location,
-        `Symbol '${token.text}' is already declared in the scope.`
-    );
-}
-
-function findBuiltinStringType(scope: SymbolScope): SymbolType | undefined {
-    for (const [key, symbol] of scope.symbolTable) {
-        if (symbol.isType() && isSourceBuiltinString(symbol.linkedNode)) return symbol;
-    }
-
-    for (const [key, child] of scope.childScopeTable) {
-        if (child.isAnonymousScope()) continue;
-
-        const found = findBuiltinStringType(child);
-        if (found !== undefined) return found;
-    }
-
-    return undefined;
+    analyzerDiagnostic.error(token.location, `Symbol '${token.text}' is already declared in the scope.`);
 }
 
 function collectEnumScopeList(scope: SymbolScope): SymbolScope[] {
@@ -512,14 +554,28 @@ function collectEnumScopeList(scope: SymbolScope): SymbolScope[] {
     return result;
 }
 
-// Judge if the class has a metadata that indicates it is a built-in string type.
-function isSourceBuiltinString(source: TypeDefinitionNode | undefined): boolean {
-    if (source === undefined) return false;
-    if (source.nodeName != NodeName.Class) return false;
-    // if (source.nodeRange.path.endsWith('as.predefined') === false) return false;
+function registerBuiltinTypeIfNeeded(symbol: SymbolObject) {
+    if (
+        symbol.isType() &&
+        getActiveGlobalScope().getContext().builtinStringType === undefined &&
+        isBuiltinStringType(symbol.linkedNode)
+    ) {
+        getActiveGlobalScope().registerBuiltinStringType(symbol);
+    }
+}
+
+// Checks whether the class is a built-in string type.
+function isBuiltinStringType(source: TypeDefinitionNode | undefined): boolean {
+    if (source === undefined) {
+        return false;
+    }
+
+    if (source.nodeName != NodeName.Class) {
+        return false;
+    }
 
     // Check if the class has a metadata that indicates it is a built-in string type.
-    const builtinStringMetadata = "BuiltinString";
+    const builtinStringMetadata = 'BuiltinString';
     if (source.metadata.some(m => m.length === 1 && m[0].text === builtinStringMetadata)) {
         return true;
     }
@@ -527,27 +583,6 @@ function isSourceBuiltinString(source: TypeDefinitionNode | undefined): boolean 
     // Check whether the class name is a built-in string type with global settings.
     return getGlobalSettings().builtinStringType === source.identifier.text;
 }
-
-// function excludeSymbolTableByFilepath(table: SymbolTable, filepath: string) {
-//     for (const [key, symbolHolder] of table) {
-//         if (symbolHolder.isFunctionHolder()) {
-//             const filteredList = symbolHolder.overloadList.filter(
-//                 overload => overload.identifierToken.location.path !== filepath
-//             );
-//
-//             if (filteredList.length === 0) {
-//                 table.delete(key);
-//             } else if (filteredList.length < symbolHolder.count) {
-//                 table.set(key, new SymbolFunctionHolder(filteredList));
-//             } // else filteredList.length == symbolHolder.count
-//             // fallthrough
-//         } else {
-//             if (symbolHolder.identifierToken.location.path === filepath) {
-//                 table.delete(key);
-//             }
-//         }
-//     }
-// }
 
 export interface SymbolAndScope {
     readonly symbol: SymbolObjectHolder;
@@ -559,7 +594,10 @@ export function collectScopeListWithParentAndUsingNamespace(scope: SymbolScope):
     return collectScopeListWithParentAndUsingNamespace_internal(scope, usingNamespaces);
 }
 
-function collectScopeListWithParentAndUsingNamespace_internal(scope: SymbolScope, usingNamespaces: ReadonlyArray<ScopeUsingNamespace>): SymbolScope[] {
+function collectScopeListWithParentAndUsingNamespace_internal(
+    scope: SymbolScope,
+    usingNamespaces: ReadonlyArray<ScopeUsingNamespace>
+): SymbolScope[] {
     const result: SymbolScope[] = [scope];
 
     // Add using namespaces to the end of the list.
@@ -599,15 +637,24 @@ export function resolveActiveScope(path: ScopePath): SymbolScope {
 
 /** @internal */
 export function tryResolveActiveScope(path: ScopePath | undefined): SymbolScope | undefined {
-    if (path === undefined) return getActiveGlobalScope();
+    if (path === undefined) {
+        return getActiveGlobalScope();
+    }
+
     return getActiveGlobalScope().resolveScope(path);
 }
 
 // -----------------------------------------------
 
 export function isScopeChildOrGrandchild(childScope: SymbolScope, parentScope: SymbolScope): boolean {
-    if (parentScope === childScope) return true;
-    if (childScope.parentScope === undefined) return false;
+    if (parentScope === childScope) {
+        return true;
+    }
+
+    if (childScope.parentScope === undefined) {
+        return false;
+    }
+
     return isScopeChildOrGrandchild(childScope.parentScope, parentScope);
 }
 

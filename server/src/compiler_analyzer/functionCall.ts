@@ -1,15 +1,13 @@
-import {
-    SymbolFunction, SymbolFunctionHolder, SymbolObject, SymbolVariable,
-} from "./symbolObject";
-import {stringifyResolvedType, stringifyResolvedTypes} from "./symbolUtils";
-import {getActiveGlobalScope, tryResolveActiveScope, SymbolScope} from "./symbolScope";
-import {applyTemplateTranslator, ResolvedType, TemplateTranslator} from "./resolvedType";
-import {analyzerDiagnostic} from "./analyzerDiagnostic";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-import {TokenRange} from "../compiler_tokenizer/tokenRange";
-import {evaluateTypeConversion} from "./typeConversion";
-import {NodeName} from "../compiler_parser/nodes";
-import {causeTypeConversionSideEffect} from "./typeConversionSideEffect";
+import {FunctionSymbol, FunctionSymbolHolder, VariableSymbol} from './symbolObject';
+import {getActiveGlobalScope, tryResolveActiveScope} from './symbolScope';
+import {applyTemplateMapping, ResolvedType, TemplateMapping} from './resolvedType';
+import {analyzerDiagnostic} from './analyzerDiagnostic';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import {TokenRange} from '../compiler_tokenizer/tokenRange';
+import {evaluateTypeConversion} from './typeConversion';
+import {NodeName} from '../compiler_parser/nodeObject';
+import {causeTypeConversionSideEffect} from './typeConversionSideEffect';
+import {stringifyResolvedType, stringifyResolvedTypes} from './symbolStringifier';
 
 interface CallerArgument {
     name: TokenObject | undefined; // Support for named arguments
@@ -18,19 +16,20 @@ interface CallerArgument {
 }
 
 interface FunctionCallArgs {
-    // caller arguments
+    // Caller-side arguments
     callerIdentifier: TokenObject;
     callerRange: TokenRange;
     callerArgs: CallerArgument[];
+    callerInstanceType?: ResolvedType;
 
-    // callee arguments
-    calleeFuncHolder: SymbolFunctionHolder;
-    calleeTemplateTranslator: (TemplateTranslator | undefined);
-    calleeDelegateVariable?: SymbolVariable; // This is required because the delegate is called by a variable.
+    // Callee-side arguments
+    calleeFuncHolder: FunctionSymbolHolder;
+    calleeTemplateMapping: TemplateMapping | undefined;
+    calleeDelegateVariable?: VariableSymbol; // This is required because the delegate is called by a variable.
 }
 
 interface FunctionCallResult {
-    bestMatching: SymbolFunction | undefined;
+    bestMatching: FunctionSymbol | undefined;
 
     /**
      * The return type of the function.
@@ -38,22 +37,22 @@ interface FunctionCallResult {
     returnType: ResolvedType | undefined;
 
     /**
-     * Side effect of the function call. (e.g. output error message)
+     * Side effects of the function call, such as reporting an error.
      */
     sideEffect: () => void;
 }
 
 /**
- * Evaluates the function call and returns its resolved type.
- * It does not trigger side effects.
+ * Evaluate the function call and return its resolved type.
+ * This does not trigger side effects.
  */
 export function evaluateFunctionCall(args: FunctionCallArgs): FunctionCallResult {
     return checkFunctionCallInternal(args);
 }
 
 /**
- * Checks whether the arguments provided by the caller match the parameters of the callee function.
- * If the function call is valid, it triggers side effects and returns the resolved return type.
+ * Check whether the caller arguments match the callee parameters.
+ * If the call is valid, trigger side effects and return the resolved return type.
  */
 export function checkFunctionCall(args: FunctionCallArgs): ResolvedType | undefined {
     const result = checkFunctionCallInternal(args);
@@ -63,10 +62,10 @@ export function checkFunctionCall(args: FunctionCallArgs): ResolvedType | undefi
 
 // -----------------------------------------------
 
-type TypeConversionSideEffect = (() => void);
+type TypeConversionSideEffect = () => void;
 
 interface BestMatching {
-    function: SymbolFunction;
+    function: FunctionSymbol;
     cost: number;
     sideEffects: TypeConversionSideEffect[];
 }
@@ -77,60 +76,77 @@ enum MismatchKind {
     InvalidNamedArgumentOrder = 'InvalidNamedArgumentOrder',
     DuplicateNamedArgument = 'DuplicateNamedArgument',
     NotFoundNamedArgument = 'NotFoundNamedArgument',
-    ParameterMismatch = 'ParameterMismatch'
+    ParameterMismatch = 'ParameterMismatch',
+    MissingConstOverload = 'MissingConstOverload',
+    AmbiguousOverload = 'AmbiguousOverload'
 }
 
 const mismatchPriority: Map<MismatchKind, number> = new Map([
     [MismatchKind.TooManyArguments, 0],
     [MismatchKind.FewerArguments, 0],
-    [MismatchKind.InvalidNamedArgumentOrder, 10], // We highly prioritize errors related to named arguments.
+    [MismatchKind.InvalidNamedArgumentOrder, 10], // Prioritize named-argument errors highly.
     [MismatchKind.DuplicateNamedArgument, 10],
     [MismatchKind.NotFoundNamedArgument, 10],
-    [MismatchKind.ParameterMismatch, 5]
+    [MismatchKind.ParameterMismatch, 5],
+    [MismatchKind.MissingConstOverload, 15],
+    [MismatchKind.AmbiguousOverload, 100] // FIXME?
 ]);
 
-type MismatchReason = {
-    reason: MismatchKind.TooManyArguments
-} | {
-    reason: MismatchKind.FewerArguments
-} | {
-    reason: MismatchKind.InvalidNamedArgumentOrder,
-    invalidArgumentIndex: number
-} | {
-    reason: MismatchKind.DuplicateNamedArgument
-    nameIndex: number
-} | {
-    reason: MismatchKind.NotFoundNamedArgument
-    nameIndex: number
-} | {
-    reason: MismatchKind.ParameterMismatch,
-    mismatchIndex: number,
-    expectedType: ResolvedType | undefined,
-    actualType: ResolvedType | undefined,
-}
+type MismatchReason =
+    | {
+          reason: MismatchKind.TooManyArguments;
+      }
+    | {
+          reason: MismatchKind.FewerArguments;
+      }
+    | {
+          reason: MismatchKind.InvalidNamedArgumentOrder;
+          invalidArgumentIndex: number;
+      }
+    | {
+          reason: MismatchKind.DuplicateNamedArgument;
+          nameIndex: number;
+      }
+    | {
+          reason: MismatchKind.NotFoundNamedArgument;
+          nameIndex: number;
+      }
+    | {
+          reason: MismatchKind.AmbiguousOverload;
+      }
+    | {
+          reason: MismatchKind.ParameterMismatch;
+          mismatchIndex: number;
+          expectedType: ResolvedType | undefined;
+          actualType: ResolvedType | undefined;
+      }
+    | {
+          reason: MismatchKind.MissingConstOverload;
+          callee: FunctionSymbol;
+      };
 
 function hasMismatchReason(reason: number | MismatchReason): reason is MismatchReason {
-    return typeof reason !== "number";
+    return typeof reason !== 'number';
 }
 
 function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
     const {callerIdentifier, calleeFuncHolder, calleeDelegateVariable} = args;
 
-    // If the callee is a delegate and succeeds in casting, return it directly.
+    // If the callee is a delegate and the cast succeeds, return it directly.
     const delegateCast = evaluateDelegateCast(args);
     if (delegateCast !== undefined) {
         return delegateCast;
     }
 
-    let bestMatching: BestMatching | undefined = undefined;
+    let bestMatchings: BestMatching[] = [];
     let mismatchReason: MismatchReason = {reason: MismatchKind.TooManyArguments};
 
-    // Find the best matching function.
+    // Find the best-matching overload.
     for (const callee of calleeFuncHolder.toList()) {
         const sideEffectBuffer: TypeConversionSideEffect[] = [];
         const evaluated = evaluateFunctionMatch(args, callee, sideEffectBuffer);
         if (hasMismatchReason(evaluated)) {
-            // Handle mismatch errors.
+            // Track mismatch errors.
             if (mismatchPriority.get(evaluated.reason)! >= mismatchPriority.get(mismatchReason.reason)!) {
                 mismatchReason = evaluated;
             }
@@ -138,44 +154,54 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
             continue;
         }
 
-        if (bestMatching === undefined ||
-            evaluated < bestMatching.cost ||
-            (evaluated === bestMatching.cost && shouldPreferFunction(callee, bestMatching.function))
-        ) {
-            // Update the best matching function.
-            bestMatching = {function: callee, cost: evaluated, sideEffects: sideEffectBuffer};
+        if (bestMatchings.length === 0 || evaluated < bestMatchings[0].cost) {
+            // Update the current best match.
+            bestMatchings = [{function: callee, cost: evaluated, sideEffects: sideEffectBuffer}];
+        } else if (evaluated === bestMatchings[0].cost) {
+            bestMatchings.push({function: callee, cost: evaluated, sideEffects: sideEffectBuffer});
         }
     }
 
-    if (bestMatching !== undefined) {
-        // Return the return type of the best matching function
+    bestMatchings = dropConstOverloadsWhenMutableExists(args, bestMatchings);
+    bestMatchings = dropPredefinedOverloadsWhenProjectExists(bestMatchings);
+    const hasAmbiguousOverload = bestMatchings.length > 1;
+    const bestMatching = bestMatchings[0];
+
+    if (bestMatching !== undefined && !hasAmbiguousOverload) {
+        // Return the best-matching function's return type.
         return {
             bestMatching: bestMatching.function,
-            returnType: applyTemplateTranslator(bestMatching.function.returnType, args.calleeTemplateTranslator),
+            returnType: applyTemplateMapping(bestMatching.function.returnType, args.calleeTemplateMapping),
             sideEffect: () => {
                 bestMatching?.sideEffects.forEach(sideEffect => sideEffect());
 
-                // Add the reference to the function that was called.
-                getActiveGlobalScope().pushReference(({
-                    toSymbol: calleeDelegateVariable ?? bestMatching.function, fromToken: callerIdentifier
-                }));
+                // Add a reference to the function that was called.
+                getActiveGlobalScope().pushReference({
+                    toSymbol: calleeDelegateVariable ?? bestMatching.function,
+                    fromToken: callerIdentifier
+                });
 
                 pushReferenceToNamedArguments(args.callerArgs, bestMatching.function);
             }
         };
     } else {
+        if (hasAmbiguousOverload) {
+            mismatchReason = {reason: MismatchKind.AmbiguousOverload};
+        }
+
         return {
             bestMatching: undefined,
             returnType: undefined,
             sideEffect: () => {
-                // Handle mismatch errors.
+                // Report mismatch errors.
                 handleMismatchError(args, mismatchReason);
 
-                // Although the function call resolution fails, a fallback symbol is added as a reference.
+                // Even if resolution fails, add a fallback symbol reference.
                 const fallbackCallee = getPreferredFunction(calleeFuncHolder);
-                getActiveGlobalScope().pushReference(({
-                    toSymbol: calleeDelegateVariable ?? fallbackCallee, fromToken: callerIdentifier
-                }));
+                getActiveGlobalScope().pushReference({
+                    toSymbol: calleeDelegateVariable ?? fallbackCallee,
+                    fromToken: callerIdentifier
+                });
 
                 pushReferenceToNamedArguments(args.callerArgs, fallbackCallee);
             }
@@ -183,36 +209,90 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
     }
 }
 
-function pushReferenceToNamedArguments(callerArgs: CallerArgument[], callee: SymbolFunction) {
-    if (callee.functionScopePath === undefined) return;
+// A project may redeclare a function that as.predefined also declares; the project's declaration wins
+// instead of being reported as an ambiguous overload.
+function dropPredefinedOverloadsWhenProjectExists(matchings: BestMatching[]): BestMatching[] {
+    const projectMatchings = matchings.filter(matching => !isPredefinedFunction(matching.function));
+    return projectMatchings.length > 0 ? projectMatchings : matchings;
+}
+
+function getPreferredFunction(holder: FunctionSymbolHolder): FunctionSymbol {
+    return holder.toList().find(func => !isPredefinedFunction(func)) ?? holder.first;
+}
+
+function isPredefinedFunction(symbol: FunctionSymbol): boolean {
+    return symbol.identifierToken.location.path.endsWith('as.predefined');
+}
+
+function dropConstOverloadsWhenMutableExists(args: FunctionCallArgs, matchings: BestMatching[]): BestMatching[] {
+    if (args.callerInstanceType === undefined || args.callerInstanceType.isConst) {
+        return matchings;
+    }
+
+    const hasMutableMethod = matchings.some(matching => isMutableMethod(matching.function));
+    if (!hasMutableMethod) {
+        return matchings;
+    }
+
+    return matchings.filter(matching => !isConstMethod(matching.function));
+}
+
+function isConstMethod(symbol: FunctionSymbol): boolean {
+    return symbol.linkedNode.nodeName !== NodeName.FuncDef && symbol.linkedNode.postfixConstToken !== undefined;
+}
+
+function isMutableMethod(symbol: FunctionSymbol): boolean {
+    return symbol.linkedNode.nodeName !== NodeName.FuncDef && symbol.linkedNode.postfixConstToken === undefined;
+}
+
+function pushReferenceToNamedArguments(callerArgs: CallerArgument[], callee: FunctionSymbol) {
+    if (callee.functionScopePath === undefined) {
+        return;
+    }
+
     const functionScope = tryResolveActiveScope(callee.functionScopePath);
-    if (functionScope === undefined) return;
+    if (functionScope === undefined) {
+        return;
+    }
 
     for (const args of callerArgs) {
-        if (args.name === undefined) continue;
+        if (args.name === undefined) {
+            continue;
+        }
 
         const name = args.name.text;
-        const paramId = callee.linkedNode.paramList.findIndex(p => p.identifier?.text === name);
-        if (paramId === -1) continue;
+        const paramId = callee.linkedNode.paramList.params.findIndex(p => p.identifier?.text === name);
+        if (paramId === -1) {
+            continue;
+        }
 
         const toSymbol = functionScope.lookupSymbol(name);
-        if (toSymbol === undefined || toSymbol.isVariable() === false) continue;
+        if (toSymbol === undefined || toSymbol.isVariable() === false) {
+            continue;
+        }
 
-        // Add a reference to the named argument in the callee function scope.
-        getActiveGlobalScope().pushReference(({toSymbol: toSymbol, fromToken: args.name}));
+        // Add a reference to the named argument in the callee scope.
+        getActiveGlobalScope().pushReference({toSymbol: toSymbol, fromToken: args.name});
     }
 }
 
 function evaluateDelegateCast(args: FunctionCallArgs): FunctionCallResult | undefined {
-    const {callerIdentifier, callerArgs, calleeFuncHolder, calleeTemplateTranslator} = args;
+    const {callerIdentifier, callerArgs, calleeFuncHolder, calleeTemplateMapping, calleeDelegateVariable} = args;
 
     const preferredCallee = getPreferredFunction(calleeFuncHolder);
-    if (preferredCallee.linkedNode.nodeName !== NodeName.FuncDef) return undefined;
 
-    // If the callee is a delegate, check if it can be cast to a delegate.
+    if (preferredCallee.linkedNode.nodeName !== NodeName.FuncDef) {
+        return undefined;
+    }
+
+    if (calleeDelegateVariable !== undefined) {
+        return undefined;
+    }
+
+    // If the callee is a delegate, check whether the argument can be cast to it.
     const delegateType = ResolvedType.create({
         typeOrFunc: preferredCallee,
-        templateTranslator: calleeTemplateTranslator
+        templateMapping: calleeTemplateMapping
     });
 
     if (callerArgs.length !== 1) {
@@ -226,16 +306,17 @@ function evaluateDelegateCast(args: FunctionCallArgs): FunctionCallResult | unde
 
     return {
         bestMatching: preferredCallee,
-        returnType: applyTemplateTranslator(delegateType, calleeTemplateTranslator),
+        returnType: applyTemplateMapping(delegateType, calleeTemplateMapping),
         sideEffect: () => {
             causeTypeConversionSideEffect(evaluation, callerArgs[0].type, delegateType, callerArgs[0].range);
 
-            // Add the reference to the function that was called.
-            getActiveGlobalScope().pushReference(({
-                toSymbol: preferredCallee, fromToken: callerIdentifier
-            }));
+            // Add a reference to the function that was called.
+            getActiveGlobalScope().pushReference({
+                toSymbol: preferredCallee,
+                fromToken: callerIdentifier
+            });
 
-            // Probably we do not need to add references to named arguments for delegates.
+            // We probably do not need named-argument references for delegates.
         }
     };
 }
@@ -243,25 +324,36 @@ function evaluateDelegateCast(args: FunctionCallArgs): FunctionCallResult | unde
 // -----------------------------------------------
 
 function evaluateFunctionMatch(
-    args: FunctionCallArgs, callee: SymbolFunction, sideEffects: TypeConversionSideEffect[]
+    args: FunctionCallArgs,
+    callee: FunctionSymbol,
+    sideEffects: TypeConversionSideEffect[]
 ): number | MismatchReason {
     const {callerArgs} = args;
 
     let totalCost = 0;
 
+    // A non-const object cannot call a postfix-const function such as `void getValue() const`.
+    if (
+        args.callerInstanceType?.isConst &&
+        callee.linkedNode.nodeName !== NodeName.FuncDef &&
+        callee.linkedNode.postfixConstToken === undefined
+    ) {
+        return {reason: MismatchKind.MissingConstOverload, callee};
+    }
+
     // Caller arguments must be at least as many as the callee parameters.
     if (callee.parameterTypes.length < callerArgs.length) {
-        if (!callee.linkedNode.paramList.at(-1)?.isVariadic) {
+        if (!callee.linkedNode.paramList.params.at(-1)?.isVariadic) {
             // The number of arguments is too many.
             return {reason: MismatchKind.TooManyArguments};
         }
     }
 
-    // The order of the caller arguments is expected to be as follows:
+    // Caller arguments are expected in the following order:
     // ('positional', 'positional', ... 'positional', 'named', 'named', ... 'named')
 
     // -----------------------------------------------
-    // Evaluate the named arguments in the caller
+    // Evaluate named arguments from the caller.
     const namedArgumentCost = evaluatePassingNamedArgument(args, callee, sideEffects);
     if (hasMismatchReason(namedArgumentCost)) {
         return namedArgumentCost;
@@ -270,7 +362,7 @@ function evaluateFunctionMatch(
     totalCost += namedArgumentCost;
 
     // -----------------------------------------------
-    // Evaluate the positional arguments in the caller
+    // Evaluate positional arguments from the caller.
     const positionalArgumentCost = evaluatePassingPositionalArgument(args, callee, sideEffects);
     if (hasMismatchReason(positionalArgumentCost)) {
         return positionalArgumentCost;
@@ -278,11 +370,20 @@ function evaluateFunctionMatch(
 
     totalCost += positionalArgumentCost;
 
+    // -----------------------------------------------
+    // Ensure every required parameter is satisfied by a positional argument,
+    // named argument, or default value.
+    if (!areRequiredParametersSatisfied(args, callee)) {
+        return {reason: MismatchKind.FewerArguments};
+    }
+
     return totalCost;
 }
 
 function evaluatePassingNamedArgument(
-    args: FunctionCallArgs, callee: SymbolFunction, sideEffectBuffer: TypeConversionSideEffect[]
+    args: FunctionCallArgs,
+    callee: FunctionSymbol,
+    sideEffectBuffer: TypeConversionSideEffect[]
 ): number | MismatchReason {
     const {callerArgs} = args;
 
@@ -292,32 +393,37 @@ function evaluatePassingNamedArgument(
         const callerArgName = callerArgs[argId].name?.text;
         if (callerArgName === undefined) {
             if (foundNamedArgument) {
-                // Positional arguments cannot be passed after named arguments
+                // Positional arguments cannot appear after named arguments.
                 return {reason: MismatchKind.InvalidNamedArgumentOrder, invalidArgumentIndex: argId};
             } else {
                 continue;
             }
         }
 
-        // At this point, the named argument is found.
+        // At this point, we have encountered a named argument.
         foundNamedArgument = true;
 
-        // Check if the named argument is duplicated.
+        // Check for duplicate named arguments.
         for (let i = 0; i < argId; i++) {
             if (callerArgs[i].name?.text === callerArgName) {
                 return {reason: MismatchKind.DuplicateNamedArgument, nameIndex: argId};
             }
         }
 
-        // Find the matching parameter name in the callee function.
+        // Find the matching parameter name in the callee.
         for (let paramId = 0; paramId < callee.parameterTypes.length; paramId++) {
-            const calleeArgName = callee.linkedNode.paramList[paramId].identifier?.text;
+            const calleeArgName = callee.linkedNode.paramList.params[paramId].identifier?.text;
             if (callerArgName === calleeArgName) {
-                // Found a matching parameter name between the caller and callee
+                // Found a matching parameter name in the callee.
 
-                // Check the type of the passing argument
-                const cost =
-                    evaluatePassingArgument(args, argId, callee.parameterTypes[paramId], sideEffectBuffer);
+                // Check the type of the passed argument.
+                const cost = evaluatePassingArgument(
+                    args,
+                    argId,
+                    callee.parameterTypes[paramId],
+                    callee.linkedNode.paramList.params[paramId].inOutToken?.text,
+                    sideEffectBuffer
+                );
                 if (hasMismatchReason(cost)) {
                     return cost;
                 }
@@ -336,19 +442,23 @@ function evaluatePassingNamedArgument(
 }
 
 function evaluatePassingPositionalArgument(
-    args: FunctionCallArgs, callee: SymbolFunction, sideEffectBuffer: TypeConversionSideEffect[]
+    args: FunctionCallArgs,
+    callee: FunctionSymbol,
+    sideEffectBuffer: TypeConversionSideEffect[]
 ): number | MismatchReason {
     const {callerArgs} = args;
     let totalCost = 0;
 
-    // Iterate over the parameters of the callee function.
+    // Iterate over the callee parameters.
     for (let paramId = 0; paramId < callee.parameterTypes.length; paramId++) {
         if (paramId >= callerArgs.length) {
-            // Handle when the caller arguments are insufficient.
+            // Handle cases where too few caller arguments were provided.
             // If the parameter has a default expression or is variadic (can accept zero args),
             // treat it as satisfied and stop checking further positional parameters.
-            if (callee.linkedNode.paramList[paramId].defaultExpr !== undefined ||
-                callee.linkedNode.paramList[paramId].isVariadic) {
+            if (
+                callee.linkedNode.paramList.params[paramId].defaultExpr !== undefined ||
+                callee.linkedNode.paramList.params[paramId].isVariadic
+            ) {
                 break;
             } else {
                 return {reason: MismatchKind.FewerArguments};
@@ -356,13 +466,18 @@ function evaluatePassingPositionalArgument(
         }
 
         if (callerArgs[paramId].name !== undefined) {
-            // Finish the positional arguments when the named argument is found.
+            // Stop processing positional arguments once a named argument appears.
             break;
         }
 
-        // Check the type of the passing argument
-        const cost =
-            evaluatePassingArgument(args, paramId, callee.parameterTypes[paramId], sideEffectBuffer);
+        // Check the type of the passed argument.
+        const cost = evaluatePassingArgument(
+            args,
+            paramId,
+            callee.parameterTypes[paramId],
+            callee.linkedNode.paramList.params[paramId].inOutToken?.text,
+            sideEffectBuffer
+        );
         if (hasMismatchReason(cost)) {
             return cost;
         }
@@ -370,12 +485,17 @@ function evaluatePassingPositionalArgument(
         totalCost += cost;
     }
 
-    if (callee.linkedNode.paramList.at(-1)?.isVariadic) {
+    if (callee.linkedNode.paramList.params.at(-1)?.isVariadic) {
         // Check the rest of the caller's variadic arguments.
         // e.g. 'arg1', 'arg2' in 'format(fmt, arg0, arg1, arg2)' (arg0 has already been checked above);
         for (let paramId = callee.parameterTypes.length; paramId < callerArgs.length; paramId++) {
-            const cost =
-                evaluatePassingArgument(args, paramId, callee.parameterTypes.at(-1), sideEffectBuffer);
+            const cost = evaluatePassingArgument(
+                args,
+                paramId,
+                callee.parameterTypes.at(-1),
+                callee.linkedNode.paramList.params.at(-1)?.inOutToken?.text,
+                sideEffectBuffer
+            );
             if (hasMismatchReason(cost)) {
                 return cost;
             }
@@ -391,13 +511,26 @@ function evaluatePassingArgument(
     args: FunctionCallArgs,
     callerArgId: number,
     calleeParam: ResolvedType | undefined,
+    calleeInOut: 'in' | 'out' | 'inout' | undefined,
     sideEffectBuffer: TypeConversionSideEffect[]
 ): number | MismatchReason {
-    const {callerArgs, calleeTemplateTranslator} = args;
-    const expectedType =
-        applyTemplateTranslator(calleeParam, calleeTemplateTranslator);
+    const {callerArgs, calleeTemplateMapping} = args;
+    const expectedType = applyTemplateMapping(calleeParam, calleeTemplateMapping);
 
     const actualType = callerArgs[callerArgId].type;
+
+    if (actualType?.typeOrFunc.identifierText === 'void') {
+        if (calleeInOut === 'out') {
+            return 0;
+        }
+
+        return {
+            reason: MismatchKind.ParameterMismatch,
+            mismatchIndex: callerArgId,
+            expectedType: expectedType,
+            actualType: actualType
+        };
+    }
 
     const evaluation = evaluateTypeConversion(actualType, expectedType);
     if (evaluation === undefined) {
@@ -416,10 +549,35 @@ function evaluatePassingArgument(
     return evaluation.cost;
 }
 
+function areRequiredParametersSatisfied(args: FunctionCallArgs, callee: FunctionSymbol): boolean {
+    const {callerArgs} = args;
+    const params = callee.linkedNode.paramList.params;
+
+    // Caller arguments are ordered as positional first, then named.
+    const firstNamedIdx = callerArgs.findIndex(a => a.name !== undefined);
+    const positionalCount = firstNamedIdx === -1 ? callerArgs.length : firstNamedIdx;
+    const namedSet = new Set(callerArgs.slice(positionalCount).map(a => a.name!.text));
+
+    for (let paramId = positionalCount; paramId < params.length; paramId++) {
+        const param = params[paramId];
+        if (param.defaultExpr !== undefined || param.isVariadic) {
+            continue;
+        }
+
+        if (namedSet.has(param.identifier?.text ?? '')) {
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
 // -----------------------------------------------
 
 function handleMismatchError(args: FunctionCallArgs, mismatchReason: MismatchReason) {
-    const {callerRange, callerArgs, calleeFuncHolder, calleeTemplateTranslator} = args;
+    const {callerRange, callerArgs, callerInstanceType, calleeFuncHolder, calleeTemplateMapping} = args;
 
     if (mismatchReason.reason === MismatchKind.InvalidNamedArgumentOrder) {
         const argRange = callerArgs[mismatchReason.invalidArgumentIndex].range;
@@ -439,19 +597,39 @@ function handleMismatchError(args: FunctionCallArgs, mismatchReason: MismatchRea
         const argLocation = callerArgs[mismatchReason.nameIndex].name?.location;
         analyzerDiagnostic.error(
             argLocation ?? callerRange.getBoundingLocation(),
-            `Named argument '${callerArgs[mismatchReason.nameIndex].name?.text}' does not found in '${calleeFuncHolder.identifierText}'.`
+            `Named argument '${callerArgs[mismatchReason.nameIndex].name?.text}' was not found in '${calleeFuncHolder.identifierText}'.`
         );
+        return;
+    } else if (mismatchReason.reason === MismatchKind.AmbiguousOverload) {
+        let message = `Multiple matching signatures to '${calleeFuncHolder.identifierText}'.\n`;
+        message += `Argument types: (${stringifyResolvedTypes(callerArgs.map(arg => arg.type))})\n`;
+        message += 'Candidate overloads:';
+        for (const overload of calleeFuncHolder.overloadList) {
+            const resolvedTypes = overload.parameterTypes.map(t => applyTemplateMapping(t, calleeTemplateMapping));
+            message += `\n(${stringifyResolvedTypes(resolvedTypes)})`;
+        }
+
+        analyzerDiagnostic.error(callerRange.getBoundingLocation(), message);
         return;
     }
 
     if (calleeFuncHolder.count === 1) {
         const calleeFunction = calleeFuncHolder.first;
-        if (mismatchReason.reason === MismatchKind.TooManyArguments || mismatchReason.reason === MismatchKind.FewerArguments) {
+        if (
+            mismatchReason.reason === MismatchKind.TooManyArguments ||
+            mismatchReason.reason === MismatchKind.FewerArguments
+        ) {
             analyzerDiagnostic.error(
                 callerRange.getBoundingLocation(),
-                `Function has ${calleeFunction.linkedNode.paramList.length} parameters, but ${callerArgs.length} were provided.`
+                `Function has ${calleeFunction.linkedNode.paramList.params.length} parameters, but ${callerArgs.length} were provided.`
             );
-        } else { // lastMismatchReason.reason === MismatchKind.ParameterMismatch
+        } else if (mismatchReason.reason === MismatchKind.MissingConstOverload) {
+            analyzerDiagnostic.error(
+                callerRange.getBoundingLocation(),
+                `Cannot call non-const method '${callerInstanceType?.identifierText}::${mismatchReason.callee.identifierText}()' on a const '${callerInstanceType?.identifierText}' instance.`
+            );
+        } else {
+            // lastMismatchReason.reason === MismatchKind.ParameterMismatch
             const actualTypeMessage = stringifyResolvedType(mismatchReason.actualType);
             const expectedTypeMessage = stringifyResolvedType(mismatchReason.expectedType);
             const callerArgRange = callerArgs[mismatchReason.mismatchIndex].range;
@@ -461,31 +639,16 @@ function handleMismatchError(args: FunctionCallArgs, mismatchReason: MismatchRea
             );
         }
     } else {
-        let message = 'No viable function.\n';
-        message += `Arguments types: (${stringifyResolvedTypes(callerArgs.map(arg => arg.type))})\n`;
-        message += 'Candidates considered:';
+        let message = 'No viable overload found.\n';
+        message += `Argument types: (${stringifyResolvedTypes(callerArgs.map(arg => arg.type))})\n`;
+        message += 'Candidate overloads:';
 
         // TODO: suffix `...` for variadic functions
         for (const overload of calleeFuncHolder.overloadList) {
-            const resolvedTypes =
-                overload.parameterTypes.map(t => applyTemplateTranslator(t, calleeTemplateTranslator));
+            const resolvedTypes = overload.parameterTypes.map(t => applyTemplateMapping(t, calleeTemplateMapping));
             message += `\n(${stringifyResolvedTypes(resolvedTypes)})`;
         }
 
         analyzerDiagnostic.error(callerRange.getBoundingLocation(), message);
     }
-}
-
-function getPreferredFunction(holder: SymbolFunctionHolder): SymbolFunction {
-    return holder.toList().reduce((best, candidate) =>
-        shouldPreferFunction(candidate, best) ? candidate : best
-    );
-}
-
-function shouldPreferFunction(candidate: SymbolFunction, current: SymbolFunction): boolean {
-    return getFunctionPriority(candidate) < getFunctionPriority(current);
-}
-
-function getFunctionPriority(symbol: SymbolFunction): number {
-    return symbol.identifierToken.location.path.endsWith('as.predefined') ? 1 : 0;
 }

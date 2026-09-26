@@ -1,17 +1,26 @@
-import {Position} from "vscode-languageserver";
-import {isSymbolInstanceMember, ScopePath, SymbolObjectHolder} from "../compiler_analyzer/symbolObject";
-import {CompletionItem, CompletionItemKind} from "vscode-languageserver/node";
-import {NodeName} from "../compiler_parser/nodes";
+import {isSymbolInstanceMember, ScopePath, SymbolObjectHolder} from '../compiler_analyzer/symbolObject';
+import {CompletionItem, CompletionItemKind} from 'vscode-languageserver/node';
+import {Node_Script, NodeName} from '../compiler_parser/nodeObject';
 import {
     collectScopeListWithParentAndUsingNamespace,
     SymbolGlobalScope,
     SymbolScope
-} from "../compiler_analyzer/symbolScope";
-import {AutocompleteInstanceMemberInfo} from "../compiler_analyzer/info";
-import {TextPosition} from "../compiler_tokenizer/textLocation";
-import {canAccessInstanceMember} from "../compiler_analyzer/symbolUtils";
-import {findScopeContainingPosition} from "../service/utils";
-import {getGlobalSettings} from "../core/settings";
+} from '../compiler_analyzer/symbolScope';
+import {
+    getInstanceAccessMarkerLocation,
+    getScopeAccessMarkerLocation,
+    InstanceAccessMarker
+} from '../compiler_analyzer/marker';
+import {TextPosition} from '../compiler_tokenizer/textLocation';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import {canAccessInstanceMember} from '../compiler_analyzer/symbolUtils';
+import {findScopeContainingPosition} from '../service/utils';
+import {getGlobalSettings} from '../core/settings';
+import {isCaretInDeclarationPart} from './completion/declarationPart';
+import {provideFunctionSectionCompletion} from './completion/functionSection';
+import {provideSnippetCompletion} from './completion/snippet';
+import {provideDirectiveCompletion} from './completion/directive';
+import {CaretContext} from './completion/caretContext';
 
 export interface CompletionItemWrapper {
     item: CompletionItem;
@@ -22,49 +31,118 @@ export interface CompletionItemWrapper {
  * Returns the completion candidates for the specified position.
  */
 export function provideCompletion(
-    globalScope: SymbolGlobalScope, caret: TextPosition
+    rawTokens: TokenObject[],
+    preprocessedTokens: TokenObject[],
+    definedSymbols: ReadonlySet<string>,
+    ast: Node_Script,
+    globalScope: SymbolGlobalScope,
+    caret: TextPosition
 ): CompletionItemWrapper[] {
-    const items = normalizeCompletionItems(provideCompletion_internal(globalScope, caret));
+    const caretContext = new CaretContext(rawTokens, preprocessedTokens, ast, caret);
 
-    // Assign sort keys to completion items.
+    if (isCaretInDeclarationPart(caretContext)) {
+        return [];
+    }
+
+    const directiveCompletion = provideDirectiveCompletion(rawTokens, definedSymbols, caret);
+    if (directiveCompletion !== undefined) {
+        return directiveCompletion.map(item => ({item}));
+    }
+
+    const functionSectionCompletion = provideFunctionSectionCompletion(caretContext);
+    if (functionSectionCompletion !== undefined) {
+        return functionSectionCompletion;
+    }
+
+    const items = dedupeCompletionItems(provideGeneralCompletion(caretContext, globalScope));
+
+    // Assign sort keys to the completion items.
     for (const item of items) {
-        attackSortKey(item.item);
+        attachSortKey(item.item);
     }
 
     return items;
 }
 
-function provideCompletion_internal(
-    globalScope: SymbolGlobalScope, caret: TextPosition
-): CompletionItemWrapper[] {
+function provideGeneralCompletion(caret: CaretContext, globalScope: SymbolGlobalScope): CompletionItemWrapper[] {
     const items: CompletionItemWrapper[] = [];
+    const caretPosition = caret.caret;
 
-    const caretScope = findScopeContainingPosition(globalScope, caret).scope;
+    const caretScope = findScopeContainingPosition(globalScope, caretPosition).scope;
 
-    // If there is a completion target within the scope that should be prioritized, return the completion candidates for it.
-    // e.g., Methods of the instance object.
-    const prioritizedCompletion = checkMissingCompletionInScope(globalScope, caretScope, caret);
-    if (prioritizedCompletion !== undefined) return prioritizedCompletion;
+    // If the caret is after an access operator, complete members from that target only.
+    // e.g., members after `object.` or symbols after `namespace::`.
+    const accessCompletion = provideAccessCompletion(globalScope, caretScope, caret);
+    if (accessCompletion !== undefined) {
+        return accessCompletion;
+    }
 
-    // Return the completion candidates for the symbols in the scope itself and its parent scope.
-    // e.g., Defined classes or functions in the scope.
+    // Return completion candidates from this scope and its parent scopes.
+    // e.g., classes or functions defined in the current context.
     for (const scope of collectScopeListWithParentAndUsingNamespace(caretScope)) {
-        items.push(...getCompletionSymbolsInScope(scope, true));
+        items.push(...provideScopeCompletion(scope, true));
     }
 
-    items.push(...hoistEnumParentScope(globalScope, []));
+    // Hoist enum members to the global scope if the setting is enabled.
+    items.push(...provideHoistedEnumMemberCompletion(globalScope, []));
+
+    // Return built-in keywords and primitive types.
+    items.push(...provideBuiltinKeywordCompletion(items));
+
+    // Return snippet completions if the setting is enabled and the context is appropriate.
+    items.push(...provideSnippetCompletion(caret).map(item => ({item})));
 
     return items;
 }
 
-function getCompletionSymbolsInScope(scope: SymbolScope, includeInstanceMember: boolean): CompletionItemWrapper[] {
+export const builtinCompletionKeywords = [
+    'auto',
+    'void',
+    'int',
+    'int8',
+    'int16',
+    'int32',
+    'int64',
+    'uint',
+    'uint8',
+    'uint16',
+    'uint32',
+    'uint64',
+    'float',
+    'double',
+    'bool',
+    'true',
+    'false',
+    'null',
+    'const'
+];
+
+function provideBuiltinKeywordCompletion(existingItems: CompletionItemWrapper[]): CompletionItemWrapper[] {
+    if (!getGlobalSettings().completion.builtinKeywords) {
+        return [];
+    }
+
+    const existingLabels = new Set(existingItems.map(item => item.item.label));
+    return builtinCompletionKeywords
+        .filter(keyword => !existingLabels.has(keyword))
+        .map(keyword => ({
+            item: {
+                label: keyword,
+                kind: CompletionItemKind.Keyword
+            }
+        }));
+}
+
+function provideScopeCompletion(scope: SymbolScope, includeInstanceMember: boolean): CompletionItemWrapper[] {
     const items: CompletionItemWrapper[] = [];
 
-    // Completion of symbols in the scope
+    // Complete symbols declared in this scope.
     for (const [symbolName, symbol] of scope.symbolTable) {
         if (includeInstanceMember === false) {
-            // Skip instance members
-            if (isSymbolInstanceMember(symbol)) continue;
+            // Skip instance members.
+            if (isSymbolInstanceMember(symbol)) {
+                continue;
+            }
 
             if (symbol.isVariable() && symbol.identifierToken.isVirtual() && symbol.identifierText === 'this') {
                 // FIXME: Probably something is wrong
@@ -72,17 +150,19 @@ function getCompletionSymbolsInScope(scope: SymbolScope, includeInstanceMember: 
             }
         }
 
-        items.push(makeCompletionItem(symbolName, symbol));
+        items.push(createCompletionItem(symbolName, symbol));
     }
 
-    // Completion of namespace
+    // Complete namespaces.
     for (const [childName, childScope] of scope.childScopeTable) {
-        if (childScope.isPureNamespaceScope() === false) continue;
+        if (childScope.isPureNamespaceScope() === false) {
+            continue;
+        }
 
         items.push({
             item: {
                 label: childName,
-                kind: CompletionItemKind.Module,
+                kind: CompletionItemKind.Module
             }
         });
     }
@@ -90,91 +170,118 @@ function getCompletionSymbolsInScope(scope: SymbolScope, includeInstanceMember: 
     return items;
 }
 
-function hoistEnumParentScope(globalScope: SymbolGlobalScope, filter: ScopePath) {
-    if (getGlobalSettings().hoistEnumParentScope === false) return [];
+function provideHoistedEnumMemberCompletion(globalScope: SymbolGlobalScope, filter: ScopePath) {
+    if (getGlobalSettings().hoistEnumParentScope === false) {
+        return [];
+    }
 
     const items: CompletionItemWrapper[] = [];
 
     for (const enumScope of globalScope.getContext().enumScopeList) {
-        if (filter.every((key, i) => key === enumScope.scopePath[i]) === false) continue;
+        if (filter.every((key, i) => key === enumScope.scopePath[i]) === false) {
+            continue;
+        }
 
         for (const [key, symbol] of enumScope.symbolTable) {
-            items.push(makeCompletionItem(key, symbol));
+            items.push(createCompletionItem(key, symbol));
         }
     }
 
     return items;
 }
 
-function getCompletionMembersInScope(globalScope: SymbolScope, caretScope: SymbolScope, symbolScope: SymbolScope): CompletionItemWrapper[] {
-    const items: CompletionItemWrapper[] = [];
+function provideAccessCompletion(globalScope: SymbolGlobalScope, caretScope: SymbolScope, caret: CaretContext) {
+    const caretPosition = caret.caret;
 
-    // Completion of symbols in the scope
-    for (const [symbolName, symbol] of symbolScope.symbolTable) {
-        if (isSymbolInstanceMember(symbol) === false) continue;
-        if (canAccessInstanceMember(caretScope, symbol) === false) continue;
-
-        items.push(makeCompletionItem(symbolName, symbol));
-    }
-
-    return items;
-}
-
-function checkMissingCompletionInScope(globalScope: SymbolGlobalScope, caretScope: SymbolScope, caret: Position) {
-    for (const info of globalScope.info.autocompleteInstanceMember) {
-        // Check if the completion target to be prioritized is at the cursor position in the scope.
-        const location = info.autocompleteLocation;
-        if (location.positionInRange(caret)) {
-            // Return the completion target to be prioritized.
-            const result = autocompleteInstanceMember(globalScope, caretScope, info);
-            if (result !== undefined && result.length > 0) {
-                return result;
+    if (isCaretAtAccessOperator(caret, '.')) {
+        // e.g., `my_object.member.$C$`
+        for (const info of globalScope.markers.instanceAccess) {
+            const location = getInstanceAccessMarkerLocation(info);
+            if (location.positionInRange(caretPosition)) {
+                return getInstanceMemberCompletionItems(globalScope, caretScope, info);
             }
         }
+
+        return [];
     }
 
-    for (const info of globalScope.info.autocompleteNamespaceAccess) {
-        // Check if the completion target to be prioritized is at the cursor position in the scope.
-        const location = info.autocompleteLocation;
-        if (location.positionInRange(caret)) {
-            // Return the completion target to be prioritized.
-            const result = getCompletionSymbolsInScope(info.accessScope, false);
-            if (result !== undefined && result.length > 0) {
-                if (info.accessScope.linkedNode?.nodeName !== NodeName.Enum) {
-                    result.push(...hoistEnumParentScope(globalScope, info.accessScope.scopePath));
+    if (isCaretAtAccessOperator(caret, '::')) {
+        // e.g., `my_scope::name::$C$`
+        for (const info of globalScope.markers.scopeAccess) {
+            const location = getScopeAccessMarkerLocation(info);
+            if (location.positionInRange(caretPosition)) {
+                const result = provideScopeCompletion(info.targetScope, false);
+                if (info.targetScope.linkedNode?.nodeName !== NodeName.Enum) {
+                    result.push(...provideHoistedEnumMemberCompletion(globalScope, info.targetScope.scopePath));
                 }
 
                 return result;
             }
         }
+
+        return [];
     }
 
     return undefined;
 }
 
-function autocompleteInstanceMember(
-    globalScope: SymbolScope,
-    caretScope: SymbolScope,
-    completion: AutocompleteInstanceMemberInfo
-) {
-    // Find the scope to which the type to be completed belongs.
-    if (completion.targetType.membersScopePath === undefined) return [];
+function isCaretAtAccessOperator(caret: CaretContext, operator: '.' | '::'): boolean {
+    const nearest = caret.getNearestToken();
 
-    const typeScope = globalScope.getGlobalScope().resolveScope(completion.targetType.scopePath)?.lookupScope(
-        completion.targetType.identifierToken.text);
-    if (typeScope === undefined) return [];
-
-    // Return the completion candidates in the scope.
-    return getCompletionMembersInScope(globalScope, caretScope, typeScope);
+    return nearest.containingToken?.text === operator || nearest.precedingToken?.text === operator;
 }
 
-function makeCompletionItem(symbolName: string, symbol: SymbolObjectHolder): CompletionItemWrapper {
-    const item: CompletionItem = {
-        label: symbolName,
-        data: {
-            sourcePriority: isProjectSymbol(symbol) ? '0' : isPredefinedSymbol(symbol) ? '1' : '2'
+function getInstanceMemberCompletionItems(
+    globalScope: SymbolScope,
+    caretScope: SymbolScope,
+    completion: InstanceAccessMarker
+) {
+    // Find the scope that owns the type being completed.
+    if (completion.targetType.membersScopePath === undefined) {
+        return [];
+    }
+
+    const typeScope = globalScope
+        .getGlobalScope()
+        .resolveScope(completion.targetType.scopePath)
+        ?.lookupScope(completion.targetType.identifierToken.text);
+    if (typeScope === undefined) {
+        return [];
+    }
+
+    // Return completion candidates from that scope.
+    return getInstanceMemberCompletionItems_internal(caretScope, typeScope);
+}
+
+function getInstanceMemberCompletionItems_internal(
+    caretScope: SymbolScope,
+    symbolScope: SymbolScope
+): CompletionItemWrapper[] {
+    const items: CompletionItemWrapper[] = [];
+
+    // Complete symbols declared in this scope.
+    for (const [symbolName, symbol] of symbolScope.symbolTable) {
+        if (isSymbolInstanceMember(symbol) === false) {
+            continue;
         }
-    };
+
+        if (canAccessInstanceMember(caretScope, symbol) === false) {
+            continue;
+        }
+
+        // Constructors are not accessible via member access (e.g., obj.Obj() is invalid).
+        if (symbol.isFunctionHolder() && symbol.first.isConstructor) {
+            continue;
+        }
+
+        items.push(createCompletionItem(symbolName, symbol));
+    }
+
+    return items;
+}
+
+function createCompletionItem(symbolName: string, symbol: SymbolObjectHolder): CompletionItemWrapper {
+    const item: CompletionItem = {label: symbolName, data: {sourcePriority: getSymbolSourcePriority(symbol)}};
 
     // FIXME: We should classify the completion items more precisely.
 
@@ -190,20 +297,43 @@ function makeCompletionItem(symbolName: string, symbol: SymbolObjectHolder): Com
         }
     } else if (symbol.isFunctionHolder()) {
         item.kind = CompletionItemKind.Function;
-    } else { // Variable
+    } else {
+        // Variable
         item.kind = CompletionItemKind.Variable;
     }
 
     return {item, symbol};
 }
 
-function normalizeCompletionItems(items: CompletionItemWrapper[]): CompletionItemWrapper[] {
-    const deduped = new Map<string, CompletionItemWrapper>();
+// Sort symbols with leading underscores toward the end.
+function attachSortKey(item: CompletionItem) {
+    if (item.sortText !== undefined) {
+        return;
+    }
 
+    const labelText: string = item.label;
+
+    let underscoreCount = 0;
+    while (underscoreCount < labelText.length && labelText[underscoreCount] === '_') {
+        underscoreCount++;
+    }
+
+    // Project symbols come before as.predefined ones so the project's redeclarations are suggested first.
+    const sourcePriority = item.data?.sourcePriority ?? SOURCE_PRIORITY_OTHER;
+    item.sortText = String(sourcePriority) + String.fromCharCode(underscoreCount) + labelText;
+}
+
+const SOURCE_PRIORITY_PROJECT = 0;
+const SOURCE_PRIORITY_PREDEFINED = 1;
+const SOURCE_PRIORITY_OTHER = 2;
+
+// A symbol declared both in as.predefined and in the project shows up once, as the project's declaration.
+function dedupeCompletionItems(items: CompletionItemWrapper[]): CompletionItemWrapper[] {
+    const deduped = new Map<string, CompletionItemWrapper>();
     for (const item of items) {
         const key = `${item.item.label}\u0000${item.item.kind ?? ''}`;
         const existing = deduped.get(key);
-        if (existing === undefined || shouldPreferCompletion(item, existing)) {
+        if (existing === undefined || getItemSourcePriority(item) < getItemSourcePriority(existing)) {
             deduped.set(key, item);
         }
     }
@@ -211,40 +341,11 @@ function normalizeCompletionItems(items: CompletionItemWrapper[]): CompletionIte
     return Array.from(deduped.values());
 }
 
-function shouldPreferCompletion(candidate: CompletionItemWrapper, current: CompletionItemWrapper): boolean {
-    return getCompletionPriority(candidate) < getCompletionPriority(current);
+function getItemSourcePriority(item: CompletionItemWrapper): number {
+    return item.symbol !== undefined ? getSymbolSourcePriority(item.symbol) : SOURCE_PRIORITY_OTHER;
 }
 
-function getCompletionPriority(item: CompletionItemWrapper): number {
-    if (item.symbol !== undefined) {
-        if (isProjectSymbol(item.symbol)) return 0;
-        if (isPredefinedSymbol(item.symbol)) return 1;
-    }
-
-    return 2;
+function getSymbolSourcePriority(symbol: SymbolObjectHolder): number {
+    const isPredefined = symbol.toList().every(entry => entry.identifierToken.location.path.endsWith('as.predefined'));
+    return isPredefined ? SOURCE_PRIORITY_PREDEFINED : SOURCE_PRIORITY_PROJECT;
 }
-
-function isProjectSymbol(symbol: SymbolObjectHolder): boolean {
-    return !isPredefinedSymbol(symbol);
-}
-
-function isPredefinedSymbol(symbol: SymbolObjectHolder): boolean {
-    return symbol.toList().every(entry => entry.identifierToken.location.path.endsWith('as.predefined'));
-}
-
-// Symbols with underscores are sorted to the back.
-function attackSortKey(item: CompletionItem) {
-    const labelText: string = item.label;
-
-    let underscoreCount = 0;
-    while (underscoreCount < labelText.length && labelText[underscoreCount] === "_") {
-        underscoreCount++;
-    }
-
-    const sourcePrefix = item.data?.sourcePriority ?? '2';
-    item.sortText = sourcePrefix + String.fromCharCode(underscoreCount) + labelText;
-}
-
-// -----------------------------------------------
-
-// TODO: Autocomplete for built-in keywords? 'true', 'opAdd', etc.

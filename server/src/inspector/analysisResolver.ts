@@ -1,10 +1,10 @@
-import * as lsp from "vscode-languageserver/node";
-import {TokenObject, TokenString} from "../compiler_tokenizer/tokenObject";
-import {NodeScript} from "../compiler_parser/nodes";
-import {DelayedTask} from "../utils/delayedTask";
-import {PublishDiagnosticsParams} from "vscode-languageserver-protocol";
-import {getGlobalSettings} from "../core/settings";
-import {PreprocessedOutput} from "../compiler_parser/parserPreprocess";
+import * as lsp from 'vscode-languageserver/node';
+import {TokenObject, StringToken} from '../compiler_tokenizer/tokenObject';
+import {Node_Script} from '../compiler_parser/nodeObject';
+import {DelayedTask} from '../utils/delayedTask';
+import {PublishDiagnosticsParams} from 'vscode-languageserver-protocol';
+import {getGlobalSettings} from '../core/settings';
+import {PreprocessedOutput} from '../compiler_parser/parserPreprocess';
 import {
     getParentDirectoryList,
     isAngelScriptFile,
@@ -12,16 +12,16 @@ import {
     resolveIncludeUri,
     resolveUri,
     shouldExcludeFile
-} from "../service/fileUtils";
-import {analyzerDiagnostic} from "../compiler_analyzer/analyzerDiagnostic";
-import {Profiler} from "../core/profiler";
-import {hoistAfterParsed} from "../compiler_analyzer/hoist";
-import {analyzeAfterHoisted} from "../compiler_analyzer/analyzer";
-import {logger} from "../core/logger";
-import {fileURLToPath} from "node:url";
-import * as fs from "fs";
-import {AnalyzerScope, createGlobalScope} from "../compiler_analyzer/analyzerScope";
-import {AnalysisQueue, AnalysisQueuePriority} from "./analysisQueue";
+} from '../service/fileUtils';
+import {analyzerDiagnostic} from '../compiler_analyzer/analyzerDiagnostic';
+import {Profiler} from '../core/profiler';
+import {hoistAfterParse} from '../compiler_analyzer/hoist';
+import {analyzeAfterHoist} from '../compiler_analyzer/analyzer';
+import {logger} from '../core/logger';
+import {fileURLToPath} from 'node:url';
+import * as fs from 'fs';
+import {AnalyzerScope, createGlobalScope} from '../compiler_analyzer/analyzerScope';
+import {AnalysisQueue, AnalysisQueuePriority} from './analysisQueue';
 
 interface PartialInspectRecord {
     readonly uri: string;
@@ -29,7 +29,7 @@ interface PartialInspectRecord {
     diagnosticsInAnalyzer: lsp.Diagnostic[];
     readonly rawTokens: TokenObject[];
     readonly preprocessedOutput: PreprocessedOutput;
-    readonly ast: NodeScript;
+    readonly ast: Node_Script;
     isAnalyzerPending: boolean;
     analyzerScope: AnalyzerScope;
 }
@@ -48,7 +48,7 @@ const shortWaitTime = 100; // ms
 
 const veryShortWaitTime = 10; // ms
 
-function getAbsolutePathFromIncludeToken(baseUri: string, token: TokenString) {
+function getAbsolutePathFromIncludeToken(baseUri: string, token: StringToken) {
     return resolveIncludeUri(baseUri, token.getStringContent());
 }
 
@@ -64,9 +64,8 @@ export class AnalysisResolver {
     public constructor(
         public readonly _inspectRecords: Map<string, PartialInspectRecord>,
         private readonly _inspectRequest: InspectRequest,
-        private readonly _diagnosticsCallback: DiagnosticsCallback,
-    ) {
-    }
+        private readonly _diagnosticsCallback: DiagnosticsCallback
+    ) {}
 
     public reset() {
         this._analysisQueue.clear();
@@ -103,7 +102,9 @@ export class AnalysisResolver {
     // Pop and analyze the file in the queue
     private popAndAnalyze() {
         const element = this._analysisQueue.frontPop();
-        if (element === undefined) return;
+        if (element === undefined) {
+            return;
+        }
 
         this.analyzeFile(element.record);
 
@@ -134,7 +135,9 @@ export class AnalysisResolver {
         } else if (this._analysisQueue.isInQueue(uri)) {
             // If the file is in the reanalysis queue, move it to the front of the direct queue and reanalyze it.
             const frontRecord = this._inspectRecords.get(uri);
-            if (frontRecord === undefined) return;
+            if (frontRecord === undefined) {
+                return;
+            }
 
             this._analysisQueue.frontPushDirect({record: frontRecord, reanalyzeDependents: false});
 
@@ -169,11 +172,11 @@ export class AnalysisResolver {
             const profiler = new Profiler();
 
             // Execute the hoist
-            const hoistResult = hoistAfterParsed(record.ast, createGlobalScope(record.uri, includeScopes));
+            const hoistResult = hoistAfterParse(record.ast, createGlobalScope(record.uri, includeScopes));
             profiler.mark('Hoist'.padEnd(profilerDescriptionLength));
 
             // Execute the analyzer
-            record.analyzerScope = analyzeAfterHoisted(record.uri, hoistResult);
+            record.analyzerScope = analyzeAfterHoist(record.uri, hoistResult);
             profiler.mark('Analyzer'.padEnd(profilerDescriptionLength));
 
             record.diagnosticsInAnalyzer = analyzerDiagnostic.endSession();
@@ -198,13 +201,20 @@ export class AnalysisResolver {
         this.reanalyzeFilesWithDependency_internal(resolvedSet, targetUri, reanalyzeDependents);
     }
 
-    private reanalyzeFilesWithDependency_internal(resolvedSet: Set<string>, targetUri: string, reanalyzeDependents: boolean) {
-        if (resolvedSet.has(targetUri)) return;
+    private reanalyzeFilesWithDependency_internal(
+        resolvedSet: Set<string>,
+        targetUri: string,
+        reanalyzeDependents: boolean
+    ) {
+        if (resolvedSet.has(targetUri)) {
+            return;
+        }
 
         const dependentFiles = Array.from(this._inspectRecords.values()) // Get all records
-            .filter(r =>
-                this.resolveIncludeAbsolutePaths(r, this.findPredefinedUri(r.uri)) // Get include paths of each record
-                    .some(uri => uri === targetUri) // Check if the target file is included
+            .filter(
+                r =>
+                    this.resolveIncludeAbsolutePaths(r, this.findPredefinedUri(r.uri)) // Get include paths of each record
+                        .some(uri => uri === targetUri) // Check if the target file is included
             );
 
         for (const dependent of dependentFiles) {
@@ -249,13 +259,11 @@ export class AnalysisResolver {
             // If implicit mutual inclusion is enabled, include all files under the directory where 'as.predefined' is located.
             if (record.uri.endsWith(predefinedFileName) === false && predefinedUri !== undefined) {
                 const predefinedDirectory = resolveUri(predefinedUri, '.');
-                return [...Array.from(includeSet),
-                    ...Array.from(this._inspectRecords.keys())
-                        .filter(uri =>
-                            uri.startsWith(predefinedDirectory) &&
-                            uri !== record.uri &&
-                            isAngelScriptFile(uri)
-                        )
+                return [
+                    ...Array.from(includeSet),
+                    ...Array.from(this._inspectRecords.keys()).filter(
+                        uri => uri.startsWith(predefinedDirectory) && uri !== record.uri && isAngelScriptFile(uri)
+                    )
                 ];
             }
         }
@@ -264,13 +272,16 @@ export class AnalysisResolver {
     }
 
     private resolveIncludeAbsolutePathsInternal(includeSet: Set<string>, record: PartialInspectRecord) {
-        if (includeSet.has(record.uri)) return;
+        if (includeSet.has(record.uri)) {
+            return;
+        }
+
         includeSet.add(record.uri);
 
         // Add include paths from include directives
-        const includePaths =
-            record.preprocessedOutput.includePathTokens.map(
-                token => getAbsolutePathFromIncludeToken(record.uri, token));
+        const includePaths = record.preprocessedOutput.includePathTokens.map(token =>
+            getAbsolutePathFromIncludeToken(record.uri, token)
+        );
 
         // Recursively resolve the include-paths
         for (const relativePath of includePaths) {
@@ -292,7 +303,8 @@ export class AnalysisResolver {
         for (const dir of dirs) {
             const predefinedUri = dir + `/${predefinedFileName}`;
 
-            if (this._inspectRecords.get(predefinedUri) !== undefined &&
+            if (
+                this._inspectRecords.get(predefinedUri) !== undefined &&
                 this._resolvedPredefinedFilepaths.has(predefinedUri)
             ) {
                 // Return the record if the file has already been analyzed
@@ -301,7 +313,9 @@ export class AnalysisResolver {
 
             if (targetUri !== predefinedUri) {
                 const content = readFileContent(predefinedUri);
-                if (content === undefined) continue;
+                if (content === undefined) {
+                    continue;
+                }
 
                 // If the file is found, inspect it
                 this._inspectRequest(predefinedUri, content);
@@ -331,7 +345,9 @@ export class AnalysisResolver {
                 this.inspectUnderDirectory(`${fileUri}/`);
             } else if (entry.isFile() && isAngelScriptFile(fileUri)) {
                 const content = readFileContent(fileUri);
-                if (content !== undefined) this._inspectRequest(fileUri, content);
+                if (content !== undefined) {
+                    this._inspectRequest(fileUri, content);
+                }
             }
         }
     }
@@ -344,9 +360,7 @@ export class AnalysisResolver {
         }
     }
 
-    private collectIncludeScope(
-        record: PartialInspectRecord, predefinedUri: string | undefined
-    ): AnalyzerScope[] {
+    private collectIncludeScope(record: PartialInspectRecord, predefinedUri: string | undefined): AnalyzerScope[] {
         const preprocessOutput = record.preprocessedOutput;
         const targetUri = record.uri;
 
@@ -355,7 +369,7 @@ export class AnalysisResolver {
 
         const includedScopes = [];
 
-        // Get the analyzed scope of included files
+        // Use the analyzed scopes of included files.
         for (const uri of includePaths) {
             let includeRecord = this._inspectRecords.get(uri);
             if (includeRecord !== undefined) {
@@ -370,7 +384,7 @@ export class AnalysisResolver {
                 continue;
             }
 
-            // If the file has not been analyzed, start inspecting it
+            // If the file has not been analyzed yet, start inspecting it.
             const content = readFileContent(uri);
             if (content !== undefined) {
                 this._inspectRequest(uri, content);
@@ -387,10 +401,10 @@ export class AnalysisResolver {
                 continue;
             }
 
-            // If the file is not found, notify the error
-            const includePathToken =
-                preprocessOutput.includePathTokens.find(
-                    token => getAbsolutePathFromIncludeToken(targetUri, token) === uri);
+            // If the file cannot be found, report an error.
+            const includePathToken = preprocessOutput.includePathTokens.find(
+                token => getAbsolutePathFromIncludeToken(targetUri, token) === uri
+            );
             if (includePathToken === undefined) {
                 // This happens when implicitMutualInclusion is enabled.
                 continue;

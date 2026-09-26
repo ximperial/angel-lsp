@@ -1,5 +1,5 @@
-import {isAnonymousIdentifier, ScopeLinkedNode, SymbolGlobalScope, SymbolScope} from "../compiler_analyzer/symbolScope";
-import {NodeName} from "../compiler_parser/nodes";
+import {isAnonymousIdentifier, ScopeLinkedNode, SymbolGlobalScope, SymbolScope} from '../compiler_analyzer/symbolScope';
+import {NodeName} from '../compiler_parser/nodeObject';
 import * as lsp from 'vscode-languageserver';
 
 export function provideDocumentSymbol(globalScope: SymbolGlobalScope) {
@@ -25,8 +25,13 @@ function provideDocumentSymbolInternal(filepath: string, scope: SymbolScope) {
 
         // TODO: Distinct between function and methods
         for (const [key, child] of scope.childScopeTable) {
-            if (child.linkedNode === undefined) continue;
-            if (child.linkedNode.nodeRange.path !== filepath) continue;
+            if (child.linkedNode === undefined) {
+                continue;
+            }
+
+            if (child.linkedNode.nodeRange.path !== filepath) {
+                continue;
+            }
 
             result.push({
                 name: scope.key,
@@ -38,7 +43,9 @@ function provideDocumentSymbolInternal(filepath: string, scope: SymbolScope) {
 
     // Append namespace definitions
     for (const namespaceNode of scope.namespaceNodes) {
-        if (namespaceNode.linkedToken.location.path !== filepath) continue;
+        if (namespaceNode.linkedToken.location.path !== filepath) {
+            continue;
+        }
 
         if (namespaceNode.node.namespaceList.at(-1) !== namespaceNode.linkedToken) {
             // Skip nested namespaces like 'A' and 'B' in 'namespace A::B::C { ... }'
@@ -54,7 +61,9 @@ function provideDocumentSymbolInternal(filepath: string, scope: SymbolScope) {
 
     // Iterate child scopes
     for (const [key, child] of scope.childScopeTable) {
-        if (child.isAnonymousScope()) continue;
+        if (child.isAnonymousScope()) {
+            continue;
+        }
 
         result.push(...provideDocumentSymbolInternal(filepath, child));
     }
@@ -64,18 +73,18 @@ function provideDocumentSymbolInternal(filepath: string, scope: SymbolScope) {
 
 function nodeToSymbolKind(node: ScopeLinkedNode) {
     switch (node.nodeName) {
-    case NodeName.Enum:
-        return lsp.SymbolKind.Enum;
-    case NodeName.Class:
-        return lsp.SymbolKind.Class;
-    case NodeName.VirtualProp:
-        return lsp.SymbolKind.Property;
-    case NodeName.Interface:
-        return lsp.SymbolKind.Interface;
-    case NodeName.Func:
-        return lsp.SymbolKind.Function;
-    case NodeName.Lambda: // FIXME: Check
-        return lsp.SymbolKind.Function;
+        case NodeName.Enum:
+            return lsp.SymbolKind.Enum;
+        case NodeName.Class:
+            return lsp.SymbolKind.Class;
+        case NodeName.VirtualProp:
+            return lsp.SymbolKind.Property;
+        case NodeName.Interface:
+            return lsp.SymbolKind.Interface;
+        case NodeName.Func:
+            return lsp.SymbolKind.Function;
+        case NodeName.Lambda: // FIXME: Check
+            return lsp.SymbolKind.Function;
     }
 
     return undefined;

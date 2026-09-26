@@ -1,9 +1,9 @@
-import {SymbolGlobalScope, SymbolScope} from "../compiler_analyzer/symbolScope";
-import {TextLocation} from "../compiler_tokenizer/textLocation";
-import {isNodeClassOrInterface} from "../compiler_analyzer/symbolObject";
-import * as lsp from "vscode-languageserver/node";
-import {NodeName} from '../compiler_parser/nodes';
-import {stringifyResolvedType} from "../compiler_analyzer/symbolUtils";
+import {SymbolGlobalScope, SymbolScope} from '../compiler_analyzer/symbolScope';
+import {TextLocation} from '../compiler_tokenizer/textLocation';
+import {isNodeClassOrInterface} from '../compiler_analyzer/symbolObject';
+import * as lsp from 'vscode-languageserver/node';
+import {NodeName} from '../compiler_parser/nodeObject';
+import {stringifyResolvedType} from '../compiler_analyzer/symbolStringifier';
 
 export function provideInlayHint(globalScope: SymbolGlobalScope, location: TextLocation): lsp.InlayHint[] {
     return [
@@ -17,16 +17,24 @@ export function provideInlayHint(globalScope: SymbolGlobalScope, location: TextL
 
 function inlayHintFunctionCall(globalScope: SymbolGlobalScope, location: TextLocation) {
     const result: lsp.InlayHint[] = [];
-    for (const info of globalScope.info.functionCall) {
+    for (const info of globalScope.markers.functionCall) {
         const callerIdentifier = info.callerIdentifier;
-        if (location.intersects(callerIdentifier.location) === false) continue;
+        if (location.intersects(callerIdentifier.location) === false) {
+            continue;
+        }
 
         // FIXME: Optimize the search
-        const callingReference = globalScope.info.reference.find(reference => reference.fromToken === info.callerIdentifier);
-        if (callingReference === undefined) continue;
+        const callingReference = globalScope.markers.reference.find(
+            reference => reference.fromToken === info.callerIdentifier
+        );
+        if (callingReference === undefined) {
+            continue;
+        }
 
         const calleeFunction = callingReference.toSymbol;
-        if (calleeFunction.isFunction() === false) continue;
+        if (calleeFunction.isFunction() === false) {
+            continue;
+        }
 
         const callerArgs = info.callerArgumentsNode.argList;
         for (let i = 0; i < callerArgs.length; i++) {
@@ -43,8 +51,10 @@ function inlayHintFunctionCall(globalScope: SymbolGlobalScope, location: TextLoc
                 }
             }
 
-            const paramIdentifier = calleeFunction.linkedNode.paramList[i]?.identifier?.text;
-            if (paramIdentifier === undefined) continue;
+            const paramIdentifier = calleeFunction.linkedNode.paramList.params[i]?.identifier?.text;
+            if (paramIdentifier === undefined) {
+                continue;
+            }
 
             result.push({
                 position: callerArgs[i].assign.nodeRange.start.location.start,
@@ -60,7 +70,7 @@ function inlayHintFunctionCall(globalScope: SymbolGlobalScope, location: TextLoc
 
 function inlayHintAutoType(globalScope: SymbolGlobalScope, location: TextLocation) {
     const result: lsp.InlayHint[] = [];
-    for (const info of globalScope.info.autoTypeResolution) {
+    for (const info of globalScope.markers.autoTypeResolution) {
         // TODO: Check with location?
 
         result.push({
@@ -88,13 +98,19 @@ function inlayHintOperatorOverloadDefinition(scope: SymbolScope, location: TextL
 
         // Iterate over class members in scope
         for (const [key, symbolHolder] of scope.symbolTable) {
-            if (symbolHolder.isFunctionHolder() === false) continue;
+            if (symbolHolder.isFunctionHolder() === false) {
+                continue;
+            }
 
             const operatorText = operatorOverloads.get(key);
-            if (operatorText === undefined) continue;
+            if (operatorText === undefined) {
+                continue;
+            }
 
             for (const symbol of symbolHolder.toList()) {
-                if (symbol.linkedNode === undefined) continue;
+                if (symbol.linkedNode === undefined) {
+                    continue;
+                }
 
                 if (symbol.linkedNode.nodeRange.getBoundingLocation().intersects(location) === false) {
                     // Skip if the operator overload definition is not in the given location
@@ -102,7 +118,7 @@ function inlayHintOperatorOverloadDefinition(scope: SymbolScope, location: TextL
                 }
 
                 // Push the operator overload info, e.g., "int opAdd() 'operator +'"
-                const identifier = symbol.linkedNode.identifier;
+                const identifier = symbol.actualIdentifierToken;
                 result.push({
                     position: identifier.location.end,
                     label: `: ${operatorText} `
@@ -112,7 +128,9 @@ function inlayHintOperatorOverloadDefinition(scope: SymbolScope, location: TextL
     }
 
     for (const childScope of scope.childScopeTable.values()) {
-        if (childScope.isAnonymousScope()) continue;
+        if (childScope.isAnonymousScope()) {
+            continue;
+        }
 
         result.push(...inlayHintOperatorOverloadDefinition(childScope, location));
     }
@@ -210,5 +228,5 @@ const operatorOverloads = new Map([
     ['opForValue12', 'foreach'],
     ['opForValue13', 'foreach'],
     ['opForValue14', 'foreach'],
-    ['opForValue15', 'foreach'],
+    ['opForValue15', 'foreach']
 ]);

@@ -1,56 +1,59 @@
-import {ScopePath, SymbolFunction, SymbolType, SymbolVariable} from "./symbolObject";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-
-// Template translation is resolved as a mapping from tokens to types.
-// In other words, for example, when instantiating `array<T>` as `array<int>`,
-// the key 'T' is mapped to the type `int`.
-export type TemplateTranslator = Map<TokenObject, ResolvedType | undefined>;
-
-function lookupTranslatedType(
-    translator: TemplateTranslator | undefined,
-    token: TokenObject | undefined
-): ResolvedType | undefined {
-    if (translator === undefined || token === undefined) {
-        return undefined;
-    }
-
-    const directMatch = translator.get(token);
-    if (directMatch !== undefined) {
-        return directMatch;
-    }
-
-    for (const [candidateToken, translatedType] of translator) {
-        if (candidateToken.text === token.text) {
-            return translatedType;
-        }
-    }
-
-    return undefined;
-}
+import {ScopePath, FunctionSymbol, TypeSymbol, VariableSymbol, QualifiedIdentifier} from './symbolObject';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import {Node_Lambda} from '../compiler_parser/nodeObject';
+import {HandleModifier} from './nodeHelper';
+import type {TokenRange} from '../compiler_tokenizer/tokenRange';
 
 /**
- * Apply the template translator to the target type.
+ * Mapping from template parameter qualifiedIdentifier to the template arguments they resolve to.
+ * For example, when instantiating `array<T>` as `array<int>`,
+ * the qualified identifier of `T` is mapped to the type `int`.
  */
-export function applyTemplateTranslator(target: ResolvedType | undefined, translator: TemplateTranslator | undefined): ResolvedType | undefined {
-    // e.g.1:
+export type TemplateMapping = Map<QualifiedIdentifier, ResolvedType | undefined>;
+
+/**
+ * Metadata for a lambda expression whose type is resolved later from a funcdef target.
+ */
+export interface LambdaInfo {
+    node: Node_Lambda;
+    parameterTypes: (ResolvedType | undefined)[];
+    resolve: (expectedType: ResolvedType, nodeRange?: TokenRange) => void;
+}
+
+export type EvaluatedValue = number | boolean | string;
+
+/**
+ * Apply the template mapping to the target type.
+ */
+export function applyTemplateMapping(
+    target: ResolvedType | undefined,
+    mapping: TemplateMapping | undefined
+): ResolvedType | undefined {
+    // e.g. 1:
     // target: array<T> with {T: T}
-    // translator: {T: int}
-    // -> array<T> with {T: int}
-    // i.e., T at the end of the target is replaced with int
+    // mapping: {T: int}
+    // --> array<T> with {T: int}
+    // i.e., the template parameter T at the end of the target is resolved to the argument int
 
-    // e.g.2:
+    // e.g. 2:
     // target: array<T> with {T: array<T> with {T: T}}
-    // translator: {T: bool}
-    // -> array<T> with {T: array<T> with {T: bool}}
-    // i.e., T at the end of the target is replaced with bool
+    // mapping: {T: bool}
+    // --> array<T> with {T: array<T> with {T: bool}}
+    // i.e., the nested template parameter T is resolved to the argument bool
 
-    if (target === undefined || translator === undefined) return target;
+    if (target === undefined || mapping === undefined) {
+        return target;
+    }
 
-    if (target.typeOrFunc.templateTypes?.length === 0 || target.templateTranslator === undefined) {
+    if (target.typeOrFunc.templateParameters?.length === 0 || target.templateMapping === undefined) {
         // The target has no templates.
-        if (target.typeOrFunc.isType() && target.typeOrFunc.isTypeParameter) {
-            // If the target is a type parameter such as `T`, translate it.
-            return lookupTranslatedType(translator, target.typeOrFunc.identifierToken) ?? target;
+        if (target.typeOrFunc.isType() && target.typeOrFunc.isTemplateParameterType) {
+            // If the target is a template parameter such as `T`, translate it.
+            // e.g.:
+            // target: T
+            // mapping: {T: bool}
+            // --> bool
+            return mapping.get(target.typeOrFunc.qualifiedIdentifier) ?? target;
         }
 
         return target;
@@ -59,62 +62,178 @@ export function applyTemplateTranslator(target: ResolvedType | undefined, transl
     // -----------------------------------------------
     // At this point, the target has template parameters.
 
-    // Create a new template translator by replacing the template type with the translated type.
-    const newTranslator = new Map<TokenObject, ResolvedType | undefined>();
-    for (const [token, translatedType] of target.templateTranslator) {
-        const translatedLeaf =
-            translatedType?.identifierToken !== undefined
-                ? lookupTranslatedType(translator, translatedType.identifierToken)
-                : undefined;
-        if (translatedLeaf !== undefined) {
-            // Replace `T` at the end of the target with the translated type.
-            newTranslator.set(token, translatedLeaf);
+    // Create a new template mapping by replacing the template parameter with the mapped argument.
+    const newMapping: TemplateMapping = new Map();
+    for (const [qualifiedIdentifier, translatedType] of target.templateMapping) {
+        if (translatedType?.typeOrFunc.isType() && mapping.has(translatedType.typeOrFunc.qualifiedIdentifier)) {
+            // Replace `T` at the end of the target with the mapped argument.
+            newMapping.set(qualifiedIdentifier, mapping.get(translatedType.typeOrFunc.qualifiedIdentifier));
         } else {
             // Templates may be nested, so visit recursively.
-            newTranslator.set(token, applyTemplateTranslator(translatedType, translator));
+            newMapping.set(qualifiedIdentifier, applyTemplateMapping(translatedType, mapping));
         }
     }
 
-    return target.cloneWithTemplateTranslator(newTranslator);
+    return target.cloneWithTemplateMapping(newMapping);
+}
+
+/**
+ * Merge two template mappings, with the overlay taking precedence over the base.
+ */
+export function mergeTemplateMappings(
+    base: TemplateMapping | undefined,
+    overlay: TemplateMapping | undefined
+): TemplateMapping | undefined {
+    if (base === undefined) {
+        return overlay;
+    }
+
+    if (overlay === undefined) {
+        return base;
+    }
+
+    const merged: TemplateMapping = new Map(base);
+    for (const [token, type] of overlay) {
+        merged.set(token, type);
+    }
+
+    return merged;
 }
 
 /**
  * The type of symbol that has been resolved by deduction.
- * This has the template translator, which is a mapping from `T` to actual types.
+ * This has the template mapping from parameters such as `T` to concrete arguments.
  */
 export class ResolvedType {
     constructor(
         // A type or function that has been resolved.
-        public readonly typeOrFunc: SymbolType | SymbolFunction,
-        public readonly isHandler?: boolean,
-        public readonly templateTranslator?: TemplateTranslator,
-        public readonly accessSource?: SymbolVariable | TokenObject // This is attached when accessing from the variable.
-    ) {
-    }
+        public readonly typeOrFunc: TypeSymbol | FunctionSymbol,
+        public readonly isConst?: boolean,
+        public readonly handle?: HandleModifier,
+        public readonly templateMapping?: TemplateMapping,
+        // This is attached when accessed through a variable, including a delegate variable.
+        // For functions, only the token information of the access source is retained.
+        private _attachedAccessSource?: VariableSymbol | TokenObject,
+        public readonly isExplicitHandleAccess?: boolean,
+        public readonly lambdaInfo?: LambdaInfo,
+        private readonly _evaluatedRvalue?: EvaluatedValue
+    ) {}
 
     public static create(args: {
-        typeOrFunc: SymbolType | SymbolFunction
-        isHandler?: boolean
-        templateTranslator?: TemplateTranslator,
-        accessSource?: SymbolVariable | TokenObject
+        typeOrFunc: TypeSymbol | FunctionSymbol;
+        isConst?: boolean;
+        handle?: HandleModifier;
+        templateMapping?: TemplateMapping;
+        attachedAccessSource?: VariableSymbol | TokenObject;
+        isExplicitHandleReference?: boolean;
+        lambdaInfo?: LambdaInfo;
+        evaluatedRvalue?: EvaluatedValue;
     }) {
-        return new ResolvedType(args.typeOrFunc, args.isHandler, args.templateTranslator, args.accessSource);
+        return new ResolvedType(
+            args.typeOrFunc,
+            args.isConst,
+            args.handle,
+            args.templateMapping,
+            args.attachedAccessSource,
+            args.isExplicitHandleReference,
+            args.lambdaInfo,
+            args.evaluatedRvalue
+        );
     }
 
-    // public clone(): ResolvedType {
-    //     return new ResolvedType(this.typeOrFunc, this.isHandler, this.templateTranslator);
-    // }
-
-    // public cloneWith(typeOrFunc: SymbolType | SymbolFunction): ResolvedType {
-    //     return new ResolvedType(typeOrFunc, this.isHandler, this.templateTranslator, this.accessToken);
-    // }
-
-    public cloneWithTemplateTranslator(templateTranslator: TemplateTranslator | undefined): ResolvedType {
-        return new ResolvedType(this.typeOrFunc, this.isHandler, templateTranslator, this.accessSource);
+    public cloneWithType(type: TypeSymbol): ResolvedType {
+        return new ResolvedType(
+            type,
+            this.isConst,
+            this.handle,
+            this.templateMapping,
+            this._attachedAccessSource,
+            this.isExplicitHandleAccess,
+            this.lambdaInfo,
+            this._evaluatedRvalue
+        );
     }
 
-    public cloneWithAccessSource(accessSource: SymbolVariable | TokenObject | undefined): ResolvedType {
-        return new ResolvedType(this.typeOrFunc, this.isHandler, this.templateTranslator, accessSource);
+    public cloneWithConst(isConst: boolean | undefined): ResolvedType {
+        return new ResolvedType(
+            this.typeOrFunc,
+            isConst,
+            this.handle,
+            this.templateMapping,
+            this._attachedAccessSource,
+            this.isExplicitHandleAccess,
+            this.lambdaInfo,
+            this._evaluatedRvalue
+        );
+    }
+
+    public cloneWithHandle(handle: HandleModifier | undefined): ResolvedType {
+        return new ResolvedType(
+            this.typeOrFunc,
+            this.isConst,
+            handle,
+            this.templateMapping,
+            this._attachedAccessSource,
+            this.isExplicitHandleAccess,
+            this.lambdaInfo,
+            this._evaluatedRvalue
+        );
+    }
+
+    public cloneWithTemplateMapping(templateMapping: TemplateMapping | undefined): ResolvedType {
+        return new ResolvedType(
+            this.typeOrFunc,
+            this.isConst,
+            this.handle,
+            templateMapping,
+            this._attachedAccessSource,
+            this.isExplicitHandleAccess,
+            this.lambdaInfo,
+            this._evaluatedRvalue
+        );
+    }
+
+    public cloneWithExplicitHandleAccess(isExplicitHandleReference: boolean | undefined): ResolvedType {
+        return new ResolvedType(
+            this.typeOrFunc,
+            this.isConst,
+            this.handle,
+            this.templateMapping,
+            this._attachedAccessSource,
+            isExplicitHandleReference,
+            this.lambdaInfo,
+            this._evaluatedRvalue
+        );
+    }
+
+    public cloneWithAttachedAccessSource(attachedAccessSource: VariableSymbol | TokenObject | undefined): ResolvedType {
+        return new ResolvedType(
+            this.typeOrFunc,
+            this.isConst,
+            this.handle,
+            this.templateMapping,
+            attachedAccessSource,
+            this.isExplicitHandleAccess,
+            this.lambdaInfo,
+            this._evaluatedRvalue
+        );
+    }
+
+    public cloneWithEvaluatedRvalue(evaluatedRvalue: EvaluatedValue | undefined): ResolvedType {
+        return new ResolvedType(
+            this.typeOrFunc,
+            this.isConst,
+            this.handle,
+            this.templateMapping,
+            this._attachedAccessSource,
+            this.isExplicitHandleAccess,
+            this.lambdaInfo,
+            evaluatedRvalue
+        );
+    }
+
+    public get evaluatedRvalue(): EvaluatedValue | undefined {
+        return this._evaluatedRvalue;
     }
 
     public get scopePath(): ScopePath | undefined {
@@ -129,36 +248,60 @@ export class ResolvedType {
         return this.typeOrFunc.identifierToken.text;
     }
 
-    public get accessSourceVariable(): SymbolVariable | undefined {
-        return this.accessSource instanceof SymbolVariable ? this.accessSource : undefined;
+    public get attachedAccessSourceVariable(): VariableSymbol | undefined {
+        return this._attachedAccessSource instanceof VariableSymbol ? this._attachedAccessSource : undefined;
     }
 
-    public get accessSourceToken(): TokenObject | undefined {
-        if (this.accessSource === undefined) {
+    public get attachedAccessSourceFunctionToken(): TokenObject | undefined {
+        return this._attachedAccessSource instanceof VariableSymbol === false ? this._attachedAccessSource : undefined;
+    }
+
+    public get attachedAccessSourceToken(): TokenObject | undefined {
+        if (this._attachedAccessSource === undefined) {
             return undefined;
         }
 
-        if (this.accessSource instanceof SymbolVariable) {
-            return this.accessSource.identifierToken;
+        if (this._attachedAccessSource instanceof VariableSymbol) {
+            return this._attachedAccessSource.identifierToken;
         }
 
-        return this.accessSource;
+        return this._attachedAccessSource;
+    }
+
+    public getTemplateArguments(): (ResolvedType | undefined)[] {
+        return (
+            this.typeOrFunc.templateParameters?.map(parameter =>
+                this.templateMapping?.get(parameter.qualifiedIdentifier)
+            ) ?? []
+        );
     }
 
     public equals(other: ResolvedType | undefined): boolean {
-        if (other === undefined) return false;
+        if (other === undefined) {
+            return false;
+        }
 
-        if (this.typeOrFunc.equals(other.typeOrFunc) === false) return false;
+        if (this.typeOrFunc.equals(other.typeOrFunc) === false) {
+            return false;
+        }
 
-        // Compare the template types.
-        if (this.typeOrFunc.templateTypes !== undefined && other.typeOrFunc.templateTypes !== undefined) {
-            if (this.typeOrFunc.templateTypes.length !== other.typeOrFunc.templateTypes.length) return false;
+        if (this.handle !== other.handle) {
+            return false;
+        }
 
-            const thisTemplates = this.typeOrFunc.templateTypes.map(type => lookupTranslatedType(this.templateTranslator, type));
-            const otherTemplates = other.typeOrFunc.templateTypes.map(type => lookupTranslatedType(other.templateTranslator, type));
+        // Compare the template arguments.
+        if (this.typeOrFunc.templateParameters !== undefined && other.typeOrFunc.templateParameters !== undefined) {
+            if (this.typeOrFunc.templateParameters.length !== other.typeOrFunc.templateParameters.length) {
+                return false;
+            }
 
-            for (let i = 0; i < thisTemplates.length; i++) {
-                if (thisTemplates[i]?.equals(otherTemplates[i]) === false) return false;
+            const thisArguments = this.getTemplateArguments();
+            const otherArguments = other.getTemplateArguments();
+
+            for (let i = 0; i < thisArguments.length; i++) {
+                if (thisArguments[i]?.equals(otherArguments[i]) === false) {
+                    return false;
+                }
             }
         }
 
@@ -179,5 +322,9 @@ export class ResolvedType {
 
     public isNilType(): boolean {
         return this.typeOrFunc.isType() && this.typeOrFunc.identifierText === 'nil';
+    }
+
+    public isFloatingPoint(): boolean {
+        return this.typeOrFunc.isType() && this.typeOrFunc.isFloatingPoint();
     }
 }

@@ -4,8 +4,7 @@ export class TextPosition implements lsp.Position {
     constructor(
         public readonly line: number,
         public readonly character: number
-    ) {
-    }
+    ) {}
 
     public static create(position: lsp.Position): TextPosition {
         return new TextPosition(position.line, position.character);
@@ -24,27 +23,41 @@ export class TextPosition implements lsp.Position {
     }
 
     /**
-     * Returns true if this position is ahead of the other position.
+     * Return true if this position comes before the other position.
      */
     public isLessThan(other: lsp.Position): boolean {
-        if (this.line < other.line) return true;
+        if (this.line < other.line) {
+            return true;
+        }
+
         return this.line === other.line && this.character < other.character;
     }
 
     /**
-     *  Returns -1 if lhs is closer to this position than rhs, 1 if rhs is closer than lhs, and 0 if both are equidistant.
+     * Return -1 if `lhs` is closer to this position than `rhs`,
+     * 1 if `rhs` is closer, and 0 if both are equally close.
      */
     public compareNearest(lhs: TextPosition, rhs: TextPosition): -1 | 0 | 1 {
         const lhsLineDiff = Math.abs(lhs.line - this.line);
         const rhsLineDiff = Math.abs(rhs.line - this.line);
 
-        if (lhsLineDiff < rhsLineDiff) return -1;
-        if (lhsLineDiff > rhsLineDiff) return 1;
+        if (lhsLineDiff < rhsLineDiff) {
+            return -1;
+        }
+
+        if (lhsLineDiff > rhsLineDiff) {
+            return 1;
+        }
 
         const lhsCharacterDiff = Math.abs(lhs.character - this.character);
         const rhsCharacterDiff = Math.abs(rhs.character - this.character);
-        if (lhsCharacterDiff < rhsCharacterDiff) return -1;
-        if (lhsCharacterDiff > rhsCharacterDiff) return 1;
+        if (lhsCharacterDiff < rhsCharacterDiff) {
+            return -1;
+        }
+
+        if (lhsCharacterDiff > rhsCharacterDiff) {
+            return 1;
+        }
 
         return 0;
     }
@@ -56,12 +69,16 @@ export class TextPosition implements lsp.Position {
     /**
      * Returns a new position moved by the specified amount.
      */
-    public movedBy(line: number, count: number): TextPosition {
+    public movedBy(line: number, character: number): TextPosition {
         let newLine = this.line + line;
-        if (newLine < 0) newLine = 0;
+        if (newLine < 0) {
+            newLine = 0;
+        }
 
-        let newCharacter = this.character + count;
-        if (newCharacter < 0) newCharacter = 0;
+        let newCharacter = this.character + character;
+        if (newCharacter < 0) {
+            newCharacter = 0;
+        }
 
         return new TextPosition(newLine, newCharacter);
     }
@@ -69,15 +86,14 @@ export class TextPosition implements lsp.Position {
 
 /**
  * Represents a mutable text position.
- * This does not satisfy `lsp.Position`,
- * so please make it immutable when passing it to `lsp.Position`.
+ * It does not satisfy `lsp.Position`,
+ * so convert it to an immutable value before passing it as `lsp.Position`.
  */
 export class MutableTextPosition {
     public constructor(
         public line_: number,
         public character_: number
-    ) {
-    }
+    ) {}
 
     public static create(position: lsp.Position): MutableTextPosition {
         return new MutableTextPosition(position.line, position.character);
@@ -92,20 +108,27 @@ export class TextRange implements lsp.Range {
     constructor(
         public readonly start: TextPosition,
         public readonly end: TextPosition
-    ) {
-    }
+    ) {}
 
     public static create(range: lsp.Range): TextRange {
         return new TextRange(TextPosition.create(range.start), TextPosition.create(range.end));
     }
 
     /**
-     * Returns true if the specified position is within this range inclusively.
+     * Return true if the specified position is inside this range, inclusive.
      */
     public positionInRange(position: lsp.Position): boolean {
-        if (position.line < this.start.line || position.line > this.end.line) return false;
-        if (position.line === this.start.line && position.character < this.start.character) return false;
-        if (position.line === this.end.line && position.character > this.end.character) return false;
+        if (position.line < this.start.line || position.line > this.end.line) {
+            return false;
+        }
+
+        if (position.line === this.start.line && position.character < this.start.character) {
+            return false;
+        }
+
+        if (position.line === this.end.line && position.character > this.end.character) {
+            return false;
+        }
 
         return true;
     }
@@ -113,14 +136,17 @@ export class TextRange implements lsp.Range {
     // create positionInRangeExclusive if needed
 
     /**
-     * Returns true if the specified range is within this range inclusively.
+     * Return true if the specified range is fully contained in this range, inclusive.
      */
     public contains(other: lsp.Range): boolean {
         return this.positionInRange(other.start) && this.positionInRange(other.end);
     }
 
     public intersects(other: TextRange): boolean {
-        if (this.end.isLessThan(other.start) || other.end.isLessThan(this.start)) return false;
+        if (this.end.isLessThan(other.start) || other.end.isLessThan(this.start)) {
+            return false;
+        }
+
         return true;
     }
 
@@ -140,8 +166,7 @@ export class MutableTextRange {
     public constructor(
         public start: MutableTextPosition,
         public end: MutableTextPosition
-    ) {
-    }
+    ) {}
 
     public static create(range: lsp.Range): MutableTextRange {
         return new MutableTextRange(MutableTextPosition.create(range.start), MutableTextPosition.create(range.end));

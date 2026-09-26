@@ -1,92 +1,124 @@
 import {
-    AccessModifier,
-    NodeClass,
-    NodeEnum,
-    NodeFunc,
-    NodeFuncDef,
-    NodeInterface,
-    NodeIntfMethod,
+    Node_Class,
+    Node_Enum,
+    Node_Func,
+    Node_FuncDef,
+    Node_Interface,
+    Node_InterfaceMethod,
     NodeName,
     NodeBase
-} from "../compiler_parser/nodes";
-import {ResolvedType} from "./resolvedType";
-import {TokenObject} from "../compiler_tokenizer/tokenObject";
-import assert = require("node:assert");
+} from '../compiler_parser/nodeObject';
+import {AccessRestriction} from './nodeHelper';
+import {EvaluatedValue, ResolvedType} from './resolvedType';
+import {TokenObject} from '../compiler_tokenizer/tokenObject';
+import assert = require('node:assert');
 
 /**
  * A node that represents a type definition.
  */
-export type TypeDefinitionNode = NodeEnum | NodeClass | NodeInterface;
+export type TypeDefinitionNode = Node_Enum | Node_Class | Node_Interface;
 
-export function isNodeEnumOrClassOrInterface(type: NodeBase | undefined): type is NodeClass {
-    if (type === undefined) return false;
+export function isNodeEnumOrClassOrInterface(
+    type: NodeBase | undefined
+): type is Node_Enum | Node_Class | Node_Interface {
+    if (type === undefined) {
+        return false;
+    }
+
     return type.nodeName === NodeName.Enum || type.nodeName === NodeName.Class || type.nodeName === NodeName.Interface;
 }
 
-export function isNodeClassOrInterface(type: NodeBase | undefined): type is NodeClass {
-    if (type === undefined) return false;
+export function isNodeClassOrInterface(type: NodeBase | undefined): type is Node_Class | Node_Interface {
+    if (type === undefined) {
+        return false;
+    }
+
     return type.nodeName === NodeName.Class || type.nodeName === NodeName.Interface;
 }
 
 export enum SymbolKind {
     Type = 'Type',
     Variable = 'Variable',
-    Function = 'Function',
+    Function = 'Function'
 }
 
 export type ScopePath = ReadonlyArray<string>;
 
 export function isScopePathEquals(lhs: ScopePath, rhs: ScopePath): boolean {
-    if (lhs.length !== rhs.length) return false;
+    if (lhs.length !== rhs.length) {
+        return false;
+    }
+
     for (let i = 0; i < lhs.length; i++) {
-        if (lhs[i] !== rhs[i]) return false;
+        if (lhs[i] !== rhs[i]) {
+            return false;
+        }
     }
 
     return true;
 }
 
+export type QualifiedIdentifier = string;
+
+export interface TemplateParameter {
+    qualifiedIdentifier: QualifiedIdentifier;
+    identifierToken: TokenObject;
+}
+
 /**
  * The base interface for all symbols.
  */
-export abstract class SymbolBase {
+export abstract class SymbolObject {
+    private _qualifiedIdentifier: QualifiedIdentifier | undefined;
+
     public abstract get kind(): SymbolKind;
 
     public abstract get scopePath(): ScopePath;
 
+    public abstract get identifierToken(): TokenObject;
+
     public abstract get identifierText(): string;
+
+    public get qualifiedIdentifier(): QualifiedIdentifier {
+        if (this._qualifiedIdentifier === undefined) {
+            this._qualifiedIdentifier = [...this.scopePath, this.identifierText].join('.');
+        }
+
+        return this._qualifiedIdentifier;
+    }
 
     public abstract toHolder(): SymbolObjectHolder;
 
-    public isType(): this is SymbolType {
+    public isType(): this is TypeSymbol {
         return this.kind === SymbolKind.Type;
     }
 
-    public isVariable(): this is SymbolVariable {
+    public isVariable(): this is VariableSymbol {
         return this.kind === SymbolKind.Variable;
     }
 
-    public isFunction(): this is SymbolFunction {
+    public isFunction(): this is FunctionSymbol {
         return this.kind === SymbolKind.Function;
     }
 
-    public equals(other: SymbolBase): boolean {
-        return this.identifierText === other.identifierText && isScopePathEquals(this.scopePath, other.scopePath);
+    public equals(other: SymbolObject): boolean {
+        return this.qualifiedIdentifier === other.qualifiedIdentifier;
     }
 }
 
 export interface SymbolHolder {
     get identifierText(): string;
 
-    isType(): this is SymbolType;
+    isType(): this is TypeSymbol;
 
-    isVariable(): this is SymbolVariable;
+    isVariable(): this is VariableSymbol;
 
-    isFunctionHolder(): this is SymbolFunctionHolder;
+    isFunctionHolder(): this is FunctionSymbolHolder;
 
     toList(): ReadonlyArray<SymbolObject>;
 }
 
-export class SymbolType extends SymbolBase implements SymbolHolder {
+export class TypeSymbol extends SymbolObject implements SymbolHolder {
     public get kind(): SymbolKind {
         return SymbolKind.Type;
     }
@@ -97,13 +129,15 @@ export class SymbolType extends SymbolBase implements SymbolHolder {
         public readonly linkedNode: TypeDefinitionNode | undefined,
         private _membersScopePath: ScopePath | undefined,
         public readonly isMixin?: boolean,
-        // Whether this is a template type parameter (i.e., true when this is 'T' in 'class array<T>')
-        public readonly isTypeParameter?: boolean,
-        // Template type parameters (i.e., 'class A<T, U>' has two template types 'T' and 'U')
-        private _templateTypes?: TokenObject[],
+        // Whether this is a template parameter (i.e., true when this is 'T' in 'class array<T>')
+        public readonly isTemplateParameterType?: boolean,
+        // Template parameter qualifiedIdentifier.
+        // e.g., 'class A<T, U>' has two template parameters for 'T' and 'U'.
+        private _templateParameters?: TemplateParameter[],
         private _baseList?: (ResolvedType | undefined)[],
-        public readonly isHandler?: boolean,
-        public readonly multipleEnumCandidates?: SymbolVariable[],
+        public readonly isHandle?: boolean,
+        public readonly aliasTargetType?: TypeSymbol,
+        public readonly multipleEnumCandidates?: VariableSymbol[]
     ) {
         super();
 
@@ -114,27 +148,29 @@ export class SymbolType extends SymbolBase implements SymbolHolder {
     }
 
     public static create(args: {
-        identifierToken: TokenObject
-        scopePath: ScopePath
-        linkedNode: TypeDefinitionNode | undefined
-        membersScopePath: ScopePath | undefined
-        isMixin?: boolean,
-        isTypeParameter?: boolean,
-        templateTypes?: TokenObject[]
-        baseList?: (ResolvedType | undefined)[]
-        isHandler?: boolean,
-        multipleEnumCandidates?: SymbolVariable[],
+        identifierToken: TokenObject;
+        scopePath: ScopePath;
+        linkedNode: TypeDefinitionNode | undefined;
+        membersScopePath: ScopePath | undefined;
+        isMixin?: boolean;
+        isTemplateParameterType?: boolean;
+        templateParameters?: TemplateParameter[];
+        baseList?: (ResolvedType | undefined)[];
+        isHandle?: boolean;
+        aliasTargetType?: TypeSymbol;
+        multipleEnumCandidates?: VariableSymbol[];
     }) {
-        return new SymbolType(
+        return new TypeSymbol(
             args.identifierToken,
             args.scopePath,
             args.linkedNode,
             args.membersScopePath,
             args.isMixin,
-            args.isTypeParameter,
-            args.templateTypes,
+            args.isTemplateParameterType,
+            args.templateParameters,
             args.baseList,
-            args.isHandler,
+            args.isHandle,
+            args.aliasTargetType,
             args.multipleEnumCandidates
         );
     }
@@ -148,13 +184,13 @@ export class SymbolType extends SymbolBase implements SymbolHolder {
         this._membersScopePath = scope;
     }
 
-    public get templateTypes(): TokenObject[] | undefined {
-        return this._templateTypes;
+    public get templateParameters(): TemplateParameter[] | undefined {
+        return this._templateParameters;
     }
 
-    public assignTemplateTypes(templateTypes: TokenObject[]) {
-        assert(this._templateTypes === undefined);
-        this._templateTypes = templateTypes;
+    public assignTemplateParameters(templateParameters: TemplateParameter[]) {
+        assert(this._templateParameters === undefined);
+        this._templateParameters = templateParameters;
     }
 
     public get baseList(): (ResolvedType | undefined)[] {
@@ -194,6 +230,14 @@ export class SymbolType extends SymbolBase implements SymbolHolder {
         return this.identifierToken.isReservedToken() && this.identifierToken.property.isNumber;
     }
 
+    public isIntegerType(): boolean {
+        return this.identifierToken.isReservedToken() && this.identifierToken.property.isIntegerType;
+    }
+
+    public isFloatingPoint(): boolean {
+        return this.identifierToken.isReservedToken() && this.identifierToken.property.isFloatingPoint;
+    }
+
     public isEnumType(): boolean {
         return this.linkedNode?.nodeName === NodeName.Enum;
     }
@@ -202,16 +246,16 @@ export class SymbolType extends SymbolBase implements SymbolHolder {
         return this.isPrimitiveType() || this.isEnumType();
     }
 
-    public isFunctionHolder(): this is SymbolFunctionHolder {
+    public isFunctionHolder(): this is FunctionSymbolHolder {
         return false;
     }
 
-    public toList(): SymbolType[] {
+    public toList(): TypeSymbol[] {
         return [this];
     }
 }
 
-export class SymbolVariable extends SymbolBase implements SymbolHolder {
+export class VariableSymbol extends SymbolObject implements SymbolHolder {
     public get kind(): SymbolKind {
         return SymbolKind.Variable;
     }
@@ -221,30 +265,33 @@ export class SymbolVariable extends SymbolBase implements SymbolHolder {
         public readonly scopePath: ScopePath,
         private _type: ResolvedType | undefined,
         public readonly isInstanceMember: boolean,
-        public readonly accessRestriction: AccessModifier | undefined,
+        public readonly accessRestriction: AccessRestriction | undefined,
         public readonly isVirtualProperty?: boolean,
         public readonly isIndexedPropertyAccessor?: boolean,
+        private _evaluatedValue?: EvaluatedValue
     ) {
         super();
     }
 
     public static create(args: {
-        identifierToken: TokenObject
-        scopePath: ScopePath
-        type: ResolvedType | undefined
-        isInstanceMember: boolean
-        accessRestriction: AccessModifier | undefined,
-        isVirtualProperty?: boolean,
-        isIndexedPropertyAccessor?: boolean,
+        identifierToken: TokenObject;
+        scopePath: ScopePath;
+        type: ResolvedType | undefined;
+        isInstanceMember: boolean;
+        accessRestriction: AccessRestriction | undefined;
+        isVirtualProperty?: boolean;
+        isIndexedPropertyAccessor?: boolean;
+        evaluatedValue?: EvaluatedValue;
     }) {
-        return new SymbolVariable(
+        return new VariableSymbol(
             args.identifierToken,
             args.scopePath,
             args.type,
             args.isInstanceMember,
             args.accessRestriction,
             args.isVirtualProperty,
-            args.isIndexedPropertyAccessor
+            args.isIndexedPropertyAccessor,
+            args.evaluatedValue
         );
     }
 
@@ -256,11 +303,11 @@ export class SymbolVariable extends SymbolBase implements SymbolHolder {
         return this;
     }
 
-    public isFunctionHolder(): this is SymbolFunctionHolder {
+    public isFunctionHolder(): this is FunctionSymbolHolder {
         return false;
     }
 
-    public toList(): SymbolVariable[] {
+    public toList(): VariableSymbol[] {
         return [this];
     }
 
@@ -272,9 +319,17 @@ export class SymbolVariable extends SymbolBase implements SymbolHolder {
         assert(this._type === undefined);
         this._type = type;
     }
+
+    public get evaluatedValue(): EvaluatedValue | undefined {
+        return this._evaluatedValue;
+    }
+
+    public assignEvaluatedValue(evaluatedValue: EvaluatedValue | undefined) {
+        this._evaluatedValue = evaluatedValue;
+    }
 }
 
-export class SymbolFunction extends SymbolBase {
+export class FunctionSymbol extends SymbolObject {
     public get kind(): SymbolKind {
         return SymbolKind.Function;
     }
@@ -282,29 +337,30 @@ export class SymbolFunction extends SymbolBase {
     constructor(
         public readonly identifierToken: TokenObject,
         public readonly scopePath: ScopePath,
-        public readonly linkedNode: NodeFunc | NodeFuncDef | NodeIntfMethod,
+        public readonly linkedNode: Node_Func | Node_FuncDef | Node_InterfaceMethod,
         public readonly functionScopePath: ScopePath | undefined,
         private _returnType: ResolvedType | undefined,
         private _parameterTypes: (ResolvedType | undefined)[],
         public readonly isInstanceMember: boolean,
-        public readonly accessRestriction: AccessModifier | undefined,
-        // Template type parameters (i.e., 'class A<T, U>' has two template types 'T' and 'U')
-        private _templateTypes?: TokenObject[],
+        public readonly accessRestriction: AccessRestriction | undefined,
+        // Template parameter qualifiedIdentifier.
+        // For example, 'func<T, U>' has two template parameters for 'T' and 'U'.
+        private _templateParameters?: TemplateParameter[]
     ) {
         super();
     }
 
     public static create(args: {
-        identifierToken: TokenObject
-        scopePath: ScopePath
-        linkedNode: NodeFunc | NodeFuncDef | NodeIntfMethod
-        functionScopePath: ScopePath | undefined,
-        returnType: ResolvedType | undefined
-        parameterTypes: (ResolvedType | undefined)[]
-        isInstanceMember: boolean
-        accessRestriction: AccessModifier | undefined
+        identifierToken: TokenObject;
+        scopePath: ScopePath;
+        linkedNode: Node_Func | Node_FuncDef | Node_InterfaceMethod;
+        functionScopePath: ScopePath | undefined;
+        returnType: ResolvedType | undefined;
+        parameterTypes: (ResolvedType | undefined)[];
+        isInstanceMember: boolean;
+        accessRestriction: AccessRestriction | undefined;
     }) {
-        return new SymbolFunction(
+        return new FunctionSymbol(
             args.identifierToken,
             args.scopePath,
             args.linkedNode,
@@ -312,17 +368,22 @@ export class SymbolFunction extends SymbolBase {
             args.returnType,
             args.parameterTypes,
             args.isInstanceMember,
-            args.accessRestriction);
+            args.accessRestriction
+        );
     }
 
-    public clone(option?: {
-        identifierToken?: TokenObject,
-        accessRestriction?: AccessModifier,
-    }): this {
-        const clone = Object.assign(Object.create(Object.getPrototypeOf(this)), this);
-        if (option?.identifierToken !== undefined) clone.identifierToken = option.identifierToken;
-        if (option?.accessRestriction !== undefined) clone.accessRestriction = option.accessRestriction;
-        return clone;
+    public clone(option?: {identifierToken?: TokenObject; accessRestriction?: AccessRestriction}): this {
+        return new FunctionSymbol(
+            option?.identifierToken ?? this.identifierToken,
+            this.scopePath,
+            this.linkedNode,
+            this.functionScopePath,
+            this._returnType,
+            this._parameterTypes,
+            this.isInstanceMember,
+            option?.accessRestriction ?? this.accessRestriction,
+            this._templateParameters
+        ) as this;
     }
 
     public get returnType(): ResolvedType | undefined {
@@ -343,13 +404,13 @@ export class SymbolFunction extends SymbolBase {
         this._parameterTypes = parameterTypes;
     }
 
-    public get templateTypes(): TokenObject[] | undefined {
-        return this._templateTypes;
+    public get templateParameters(): TemplateParameter[] | undefined {
+        return this._templateParameters;
     }
 
-    public assignTemplateTypes(templateTypes: TokenObject[]) {
-        assert(this._templateTypes === undefined);
-        this._templateTypes = templateTypes;
+    public assignTemplateParameters(templateParameters: TemplateParameter[]) {
+        assert(this._templateParameters === undefined);
+        this._templateParameters = templateParameters;
     }
 
     // public mutate(): Mutable<this> {
@@ -368,15 +429,19 @@ export class SymbolFunction extends SymbolBase {
         return this.linkedNode.identifier;
     }
 
-    public toHolder(): SymbolFunctionHolder {
-        return new SymbolFunctionHolder(this);
+    public toHolder(): FunctionSymbolHolder {
+        return new FunctionSymbolHolder(this);
+    }
+
+    public get isConstructor(): boolean {
+        return this.linkedNode.nodeName === NodeName.Func && this.linkedNode.head.tag === 'constructor';
     }
 }
 
-export class SymbolFunctionHolder implements SymbolHolder {
-    private readonly _overloadList: SymbolFunction[] = [];
+export class FunctionSymbolHolder implements SymbolHolder {
+    private readonly _overloadList: FunctionSymbol[] = [];
 
-    public constructor(firstElement: SymbolFunction | SymbolFunction[]) {
+    public constructor(firstElement: FunctionSymbol | FunctionSymbol[]) {
         if (Array.isArray(firstElement)) {
             assert(firstElement.length > 0);
             this._overloadList = firstElement;
@@ -385,11 +450,11 @@ export class SymbolFunctionHolder implements SymbolHolder {
         }
     }
 
-    public pushOverload(overload: SymbolFunction) {
+    public pushOverload(overload: FunctionSymbol) {
         this._overloadList.push(overload);
     }
 
-    public get overloadList(): ReadonlyArray<SymbolFunction> {
+    public get overloadList(): ReadonlyArray<FunctionSymbol> {
         return this._overloadList;
     }
 
@@ -397,7 +462,7 @@ export class SymbolFunctionHolder implements SymbolHolder {
         return this._overloadList.length;
     }
 
-    public get first(): SymbolFunction {
+    public get first(): FunctionSymbol {
         return this._overloadList[0];
     }
 
@@ -405,32 +470,30 @@ export class SymbolFunctionHolder implements SymbolHolder {
         return this.first.identifierToken.text;
     }
 
-    public isVariable(): this is SymbolVariable {
+    public isVariable(): this is VariableSymbol {
         return false;
     }
 
-    public isType(): this is SymbolType {
+    public isType(): this is TypeSymbol {
         return false;
     }
 
-    public isFunctionHolder(): this is SymbolFunctionHolder {
+    public isFunctionHolder(): this is FunctionSymbolHolder {
         return true;
     }
 
-    public toList(): ReadonlyArray<SymbolFunction> {
+    public toList(): ReadonlyArray<FunctionSymbol> {
         return this._overloadList;
     }
 }
 
-export function isSymbolInstanceMember(symbol: SymbolObjectHolder): symbol is SymbolFunctionHolder | SymbolVariable {
+export function isSymbolInstanceMember(symbol: SymbolObjectHolder): symbol is FunctionSymbolHolder | VariableSymbol {
     const canBeMember = symbol.isFunctionHolder() || symbol.isVariable();
-    if (canBeMember === false) return false;
+    if (canBeMember === false) {
+        return false;
+    }
 
     return symbol.toList()[0].isInstanceMember;
 }
 
-export type SymbolObject = SymbolType | SymbolVariable | SymbolFunction;
-
-export type SymbolObjectHolder = SymbolType | SymbolVariable | SymbolFunctionHolder;
-
-// (IF | FOR | WHILE | RETURN | STATBLOCK | BREAK | CONTINUE | DOWHILE | SWITCH | EXPRSTAT | TRY)
+export type SymbolObjectHolder = TypeSymbol | VariableSymbol | FunctionSymbolHolder;

@@ -20,6 +20,29 @@ export type DeepReadonly<T> = {
     readonly [P in keyof T]: T[P] extends (infer U)[]
         ? ReadonlyArray<DeepReadonly<U>>
         : T[P] extends object
-            ? DeepReadonly<T[P]>
-            : T[P];
+          ? DeepReadonly<T[P]>
+          : T[P];
 };
+
+export function withDefaults<T>(data: any, defaults: T): T {
+    if (data === null || data === undefined) {
+        return structuredClone(defaults);
+    }
+
+    if (Array.isArray(defaults)) {
+        return (Array.isArray(data) ? data.filter(value => value != null) : structuredClone(defaults)) as T;
+    }
+
+    if (typeof defaults === 'object' && defaults !== null) {
+        if (typeof data !== 'object') {
+            return structuredClone(defaults);
+        }
+
+        const defaultRecord = defaults as Record<string, any>;
+        return Object.fromEntries(
+            Object.keys(defaultRecord).map(key => [key, withDefaults(data[key], defaultRecord[key])])
+        ) as T;
+    }
+
+    return data;
+}

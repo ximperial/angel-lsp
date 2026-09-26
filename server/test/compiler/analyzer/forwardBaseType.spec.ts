@@ -1,23 +1,27 @@
-import {expectSuccess} from "./utils";
+import {expectSuccess} from './utils';
 
 describe('analyzer/forwardBaseType', () => {
-    expectSuccess(`
-        class Derived : Base {
-            int value;
-        }
+    it('accepts case 1', () => {
+        expectSuccess(`
+            class Derived : Base {
+                int value;
+            }
 
-        class Base {
-            int health;
-        }
-    `);
+            class Base {
+                int health;
+            }
+        `);
+    });
 
-    expectSuccess(`
-        class DerivedBuff : Buff {
-            int stacks;
-        }
+    it('accepts case 2', () => {
+        expectSuccess(`
+            class DerivedBuff : Buff {
+                int stacks;
+            }
 
-        class Buff {
-            int duration;
-        }
-    `);
+            class Buff {
+                int duration;
+            }
+        `);
+    });
 });
