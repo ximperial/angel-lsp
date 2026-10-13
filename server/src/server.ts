@@ -260,7 +260,14 @@ function profileInspect(document: lsp_textDocument.TextDocument) {
 // -----------------------------------------------
 // Semantic Tokens Provider
 s_connection.languages.semanticTokens.on(params => {
-    return provideSemanticTokens(s_inspector.getRecord(params.textDocument.uri).rawTokens);
+    const uri = params.textDocument.uri;
+    if (s_inspector.getRecord(uri).isAnalyzerPending) {
+        // Fresh tokens only carry parser highlights until the analyzer retags them,
+        // so analyze this file now instead of showing plain colors until the queue reaches it.
+        s_inspector.flushRecord(uri);
+    }
+
+    return provideSemanticTokens(s_inspector.getRecord(uri).rawTokens);
 });
 
 // -----------------------------------------------
@@ -521,6 +528,9 @@ s_connection.onRequest('angelScript/printGlobalScope', params => {
 s_connection.listen();
 
 // Analysis retags identifier highlights (see semanticRefine.ts), so ask the client to re-pull semantic tokens.
+// Only for changes coming from other files; the requested file is analyzed on demand.
+// Long enough that the dependents reanalysis cascade (~150 ms per file) collapses into one refresh.
+const semanticTokensRefreshDelay = 500; // ms
 let s_semanticTokensRefreshTimer: NodeJS.Timeout | undefined;
 s_inspector.registerDiagnosticsCallback(params => {
     s_connection.sendDiagnostics(params);
@@ -537,5 +547,5 @@ s_inspector.registerDiagnosticsCallback(params => {
         s_semanticTokensRefreshTimer = undefined;
         // Typed as void, but it returns the request promise at runtime; swallow rejections.
         Promise.resolve(s_connection.languages.semanticTokens.refresh() as unknown).catch(() => {});
-    }, 150);
+    }, semanticTokensRefreshDelay);
 });
