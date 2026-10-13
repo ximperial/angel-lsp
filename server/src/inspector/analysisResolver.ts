@@ -22,6 +22,7 @@ import {fileURLToPath} from 'node:url';
 import * as fs from 'fs';
 import {AnalyzerScope, createGlobalScope} from '../compiler_analyzer/analyzerScope';
 import {AnalysisQueue, AnalysisQueuePriority} from './analysisQueue';
+import {refineSemanticHighlights} from '../services/semanticRefine';
 
 interface PartialInspectRecord {
     readonly uri: string;
@@ -177,6 +178,7 @@ export class AnalysisResolver {
 
             // Execute the analyzer
             record.analyzerScope = analyzeAfterHoist(record.uri, hoistResult);
+            refineSemanticHighlights(record.uri, record.analyzerScope.globalScope);
             profiler.mark('Analyzer'.padEnd(profilerDescriptionLength));
 
             record.diagnosticsInAnalyzer = analyzerDiagnostic.endSession();

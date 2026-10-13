@@ -39,6 +39,7 @@ let s_hasConfigurationCapability = false;
 let s_hasWorkspaceFolderCapability = false;
 
 let s_hasWorkspaceDiagnosticsRefreshCapability = false;
+let s_hasSemanticTokensRefreshCapability = false;
 
 let s_hasDiagnosticRelatedInformationCapability = false;
 
@@ -53,6 +54,7 @@ s_connection.onInitialize((params: lsp.InitializeParams) => {
     s_hasWorkspaceFolderCapability = capabilities.workspace?.workspaceFolders ?? false;
 
     s_hasWorkspaceDiagnosticsRefreshCapability = capabilities.workspace?.diagnostics?.refreshSupport ?? false;
+    s_hasSemanticTokensRefreshCapability = capabilities.workspace?.semanticTokens?.refreshSupport ?? false;
 
     s_hasDiagnosticRelatedInformationCapability =
         capabilities.textDocument?.publishDiagnostics?.relatedInformation ?? false;
@@ -518,4 +520,22 @@ s_connection.onRequest('angelScript/printGlobalScope', params => {
 // Listen on the connection
 s_connection.listen();
 
-s_inspector.registerDiagnosticsCallback(s_connection.sendDiagnostics);
+// Analysis retags identifier highlights (see semanticRefine.ts), so ask the client to re-pull semantic tokens.
+let s_semanticTokensRefreshTimer: NodeJS.Timeout | undefined;
+s_inspector.registerDiagnosticsCallback(params => {
+    s_connection.sendDiagnostics(params);
+
+    if (s_hasSemanticTokensRefreshCapability === false) {
+        return;
+    }
+
+    if (s_semanticTokensRefreshTimer !== undefined) {
+        clearTimeout(s_semanticTokensRefreshTimer);
+    }
+
+    s_semanticTokensRefreshTimer = setTimeout(() => {
+        s_semanticTokensRefreshTimer = undefined;
+        // Typed as void, but it returns the request promise at runtime; swallow rejections.
+        Promise.resolve(s_connection.languages.semanticTokens.refresh() as unknown).catch(() => {});
+    }, 150);
+});
