@@ -2090,8 +2090,11 @@ function analyzeCompOp(
 }
 
 function canReferenceComparison(lhs: ResolvedType, rhs: ResolvedType): boolean {
-    const lhsIsReference = lhs.handle !== undefined || lhs.isNullType();
-    const rhsIsReference = rhs.handle !== undefined || rhs.isNullType();
+    // A script class instance (e.g. `this`) is a reference type, so `is` compares it without an explicit handle.
+    const isScriptClass = (t: ResolvedType) =>
+        t.typeOrFunc.isFunction() === false && t.typeOrFunc.linkedNode?.nodeName === NodeName.Class;
+    const lhsIsReference = lhs.handle !== undefined || lhs.isNullType() || isScriptClass(lhs);
+    const rhsIsReference = rhs.handle !== undefined || rhs.isNullType() || isScriptClass(rhs);
     if (lhsIsReference === false || rhsIsReference === false) {
         return false;
     }
