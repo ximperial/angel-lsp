@@ -6,18 +6,50 @@ import {getGlobalSettings} from '../core/settings';
 import {minimatch} from 'minimatch';
 import {getEditorState} from '../core/editorState';
 
+// Glob matching compiles the pattern on every call, and the analyzer asks about every file on every reanalysis.
+// The answers only change with the settings or the workspace folder, so they are cached against both.
+const angelScriptFileCache = new Map<string, boolean>();
+const excludeFileCache = new Map<string, boolean>();
+let matchCacheSettings: unknown;
+let matchCacheWorkspace: string | undefined;
+
+function validateMatchCache() {
+    const settings = getGlobalSettings();
+    const workspace = getEditorState().workspaceFolderUris[0];
+    if (settings !== matchCacheSettings || workspace !== matchCacheWorkspace) {
+        angelScriptFileCache.clear();
+        excludeFileCache.clear();
+        matchCacheSettings = settings;
+        matchCacheWorkspace = workspace;
+    }
+}
+
 export function isAngelScriptFile(relativeOrAbsolute: string): boolean {
-    // FIXME?
+    validateMatchCache();
+    const cached = angelScriptFileCache.get(relativeOrAbsolute);
+    if (cached !== undefined) {
+        return cached;
+    }
+
     const patterns = getGlobalSettings().files.angelScript;
     const fileName = path.basename(relativeOrAbsolute);
-    return patterns.some(pattern => minimatch(fileName, pattern) || minimatch(relativeOrAbsolute, pattern));
+    const result = patterns.some(pattern => minimatch(fileName, pattern) || minimatch(relativeOrAbsolute, pattern));
+    angelScriptFileCache.set(relativeOrAbsolute, result);
+    return result;
 }
 
 export function shouldExcludeFile(uri: string): boolean {
-    // TODO: Optimize
+    validateMatchCache();
+    const cached = excludeFileCache.get(uri);
+    if (cached !== undefined) {
+        return cached;
+    }
+
     const patterns = getGlobalSettings().files.exclude;
     const cwd = (getEditorState().workspaceFolderUris[0] ?? '') + '/';
-    return patterns.some(pattern => minimatch(uri, pattern) || minimatch(uri, resolveUri(cwd, pattern)));
+    const result = patterns.some(pattern => minimatch(uri, pattern) || minimatch(uri, resolveUri(cwd, pattern)));
+    excludeFileCache.set(uri, result);
+    return result;
 }
 
 /**
@@ -122,23 +154,44 @@ function toAbsolutePath(inputPath: string, baseDir: string = process.cwd()): str
     return path.isAbsolute(inputPath) ? inputPath : path.resolve(baseDir, inputPath);
 }
 
+// Include resolution stats the same files for every record on every reanalysis.
+// A short lifetime keeps the answers fresh enough for files created or deleted outside the editor.
+const fileExistenceLifetime = 2000; // ms
+
+const fileExistenceCache = new Map<string, {isFile: boolean; checkedAt: number}>();
+
 export function isFileUri(uri: string): boolean {
-    try {
-        const path = fileURLToPath(uri);
-        return fs.statSync(path).isFile();
-    } catch (error) {
-        return false;
+    const now = Date.now();
+    const cached = fileExistenceCache.get(uri);
+    if (cached !== undefined && now - cached.checkedAt < fileExistenceLifetime) {
+        return cached.isFile;
     }
+
+    let isFile: boolean;
+    try {
+        isFile = fs.statSync(fileURLToPath(uri)).isFile();
+    } catch (error) {
+        isFile = false;
+    }
+
+    fileExistenceCache.set(uri, {isFile: isFile, checkedAt: now});
+    return isFile;
+}
+
+/**
+ * Forget cached file existence, e.g. when the editor reports that files were created or deleted.
+ */
+export function clearFileExistenceCache() {
+    fileExistenceCache.clear();
 }
 
 export function readFileContent(uri: string): string | undefined {
     try {
-        const path = fileURLToPath(uri);
-        if (fs.existsSync(path) === false) {
+        if (isFileUri(uri) === false) {
             return undefined;
         }
 
-        return fs.readFileSync(path, 'utf8');
+        return fs.readFileSync(fileURLToPath(uri), 'utf8');
     } catch (error) {
         return undefined;
     }
