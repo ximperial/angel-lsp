@@ -46,7 +46,8 @@ import {
     Node_VarAccess,
     Node_VirtualProp,
     Node_While,
-    voidParameter
+    voidParameter,
+    ScopeAndIdentifier
 } from '../compiler_parser/nodeObject';
 import {FormatterState, isEditedWrapAt} from './formatterState';
 import {TextEdit} from 'vscode-languageserver-types/lib/esm/main';
@@ -204,25 +205,7 @@ function formatClass(format: FormatterState, classNode: Node_Class) {
     if (formatMoveToNonComment(format)?.text === ';') {
         formatTargetBy(format, ';', {condenseLeft: true, connectTail: true});
     } else {
-        // Without this the base list tokens are skipped and the class body loses its indentation.
-        if (classNode.baseList.length > 0) {
-            formatTargetBy(format, ':', {});
-
-            for (let i = 0; i < classNode.baseList.length; i++) {
-                if (i > 0) {
-                    formatTargetBy(format, ',', {condenseLeft: true});
-                }
-
-                const base = classNode.baseList[i];
-                if (base.scope !== undefined) {
-                    formatScope(format, base.scope);
-                }
-
-                if (base.identifier !== undefined) {
-                    formatTargetBy(format, base.identifier.text, {});
-                }
-            }
-        }
+        formatBaseList(format, classNode.baseList);
 
         formatBraceBlock(format, () => {
             for (const node of classNode.memberList) {
@@ -237,6 +220,26 @@ function formatClass(format: FormatterState, classNode: Node_Class) {
                 }
             }
         });
+    }
+}
+
+// [':' SCOPE IDENTIFIER {',' SCOPE IDENTIFIER}]
+function formatBaseList(format: FormatterState, baseList: ScopeAndIdentifier[]) {
+    for (let i = 0; i < baseList.length; i++) {
+        if (i === 0) {
+            formatTargetBy(format, ':', {});
+        } else {
+            formatTargetBy(format, ',', {condenseLeft: true});
+        }
+
+        const {scope, identifier} = baseList[i];
+        if (scope !== undefined) {
+            formatScope(format, scope, {preserveGlobalLeftSpace: true});
+        }
+
+        if (identifier !== undefined) {
+            formatTargetBy(format, identifier.text, {});
+        }
     }
 }
 
@@ -354,6 +357,8 @@ function formatInterface(format: FormatterState, interfaceNode: Node_Interface) 
     if (formatMoveToNonComment(format)?.text === ';') {
         formatTargetBy(format, ';', {condenseLeft: true, connectTail: true});
     } else {
+        formatBaseList(format, interfaceNode.baseList);
+
         formatBraceBlock(format, () => {
             for (const node of interfaceNode.memberList) {
                 if (node.nodeName === NodeName.VirtualProp) {
@@ -703,11 +708,14 @@ function formatInitList(format: FormatterState, initList: Node_InitList) {
 }
 
 // **BNF** SCOPE ::= ['::'] {IDENTIFIER '::'} [IDENTIFIER ['<' TYPE {',' TYPE} '>'] '::']
-function formatScope(format: FormatterState, scope: Node_Scope) {
+function formatScope(format: FormatterState, scope: Node_Scope, option: {preserveGlobalLeftSpace?: boolean} = {}) {
     formatMoveUntilNodeStart(format, scope);
 
     if (scope.isGlobal) {
-        formatTargetBy(format, '::', {condenseSides: true});
+        formatTargetBy(format, '::', {
+            condenseLeft: option.preserveGlobalLeftSpace !== true,
+            condenseRight: true
+        });
     }
 
     for (let i = 0; i < scope.scopeList.length; i++) {
@@ -1045,7 +1053,8 @@ function formatExprTerm(format: FormatterState, exprTerm: Node_ExprTerm) {
         formatInitList(format, exprTerm.initList);
     } else if (exprTerm.exprTerm === 2) {
         for (let i = 0; i < exprTerm.preOps.length; i++) {
-            formatTargetBy(format, exprTerm.preOps[i].text, {condenseRight: true});
+            const condenseRight = exprTerm.preOps[i].text !== 'not';
+            formatTargetBy(format, exprTerm.preOps[i].text, {condenseRight});
         }
 
         formatExprValue(format, exprTerm.value);
