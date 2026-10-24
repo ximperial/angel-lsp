@@ -1,5 +1,5 @@
 import {TokenObject} from '../compiler_tokenizer/tokenObject';
-import {FunctionSymbolHolder, SymbolObject, TypeSymbol} from './symbolObject';
+import {FunctionSymbol, FunctionSymbolHolder, SymbolObject, TypeSymbol} from './symbolObject';
 import {SymbolScope} from './symbolScope';
 import {TextLocation} from '../compiler_tokenizer/textLocation';
 import {ResolvedType, TemplateMapping} from './resolvedType';
@@ -71,6 +71,12 @@ export interface FunctionCallMarker {
     readonly callerArgumentsNode: Node_ArgList;
     readonly calleeFuncHolder: FunctionSymbolHolder;
     readonly calleeTemplateMapping: TemplateMapping | undefined;
+
+    /**
+     * The overload chosen by overload resolution; undefined while the call is incomplete or ambiguous.
+     * Signature help uses it to highlight the overload the caller is actually using.
+     */
+    resolvedCallee?: FunctionSymbol;
 }
 
 /**

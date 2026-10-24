@@ -479,7 +479,12 @@ s_connection.onSignatureHelp(params => {
         return null;
     }
 
-    return provideSignatureHelp(diagnosedScope.globalScope, params.position, uri);
+    return provideSignatureHelp(
+        diagnosedScope.globalScope,
+        params.position,
+        uri,
+        params.context?.activeSignatureHelp
+    );
 });
 
 // -----------------------------------------------

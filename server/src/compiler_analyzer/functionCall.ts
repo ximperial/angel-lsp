@@ -56,9 +56,19 @@ export function evaluateFunctionCall(args: FunctionCallArgs): FunctionCallResult
  * If the call is valid, trigger side effects and return the resolved return type.
  */
 export function checkFunctionCall(args: FunctionCallArgs): ResolvedType | undefined {
+    return checkFunctionCallWithMatch(args).returnType;
+}
+
+/**
+ * Same as `checkFunctionCall`, but also reports which overload was chosen.
+ */
+export function checkFunctionCallWithMatch(args: FunctionCallArgs): {
+    returnType: ResolvedType | undefined;
+    bestMatching: FunctionSymbol | undefined;
+} {
     const result = checkFunctionCallInternal(args);
     result.sideEffect();
-    return result.returnType;
+    return {returnType: result.returnType, bestMatching: result.bestMatching};
 }
 
 // -----------------------------------------------
