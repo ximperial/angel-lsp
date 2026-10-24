@@ -135,6 +135,7 @@ function formatBraceBlock(format: FormatterState, action: () => void, isIndent: 
     }
 
     const startLine = format.getCursor().line;
+    const startCursor = {...format.getCursor()};
 
     if (isIndent) {
         format.pushIndent();
@@ -147,7 +148,10 @@ function formatBraceBlock(format: FormatterState, action: () => void, isIndent: 
     }
 
     const endWrap = startLine !== format.getCursor().line || isEditedWrapAt(format.getResult(), startLine);
-    formatTargetBy(format, '}', {forceWrap: endWrap});
+    // Blok kosong: `{}` / `{ }` sesuai tulisan asli.
+    const cursor = format.getCursor();
+    const isEmpty = cursor.line === startCursor.line && cursor.character === startCursor.character;
+    formatTargetBy(format, '}', {forceWrap: endWrap, keepSpace: isEmpty});
 }
 
 // **BNF** ENUM ::= {'shared' | 'external'} 'enum' IDENTIFIER [ ':' ('int' | 'int8' | 'int16' | 'int32' | 'int64' | 'uint' | 'uint8' | 'uint16' | 'uint32' | 'uint64') ] (';' | ('{' IDENTIFIER ['=' EXPR] {',' IDENTIFIER ['=' EXPR]} '}'))
@@ -383,12 +387,12 @@ function formatVar(format: FormatterState, varNode: Node_Var) {
         }
 
         if (initializer.nodeName === NodeName.InitList) {
-            formatTargetBy(format, '=', {});
+            formatTargetBy(format, '=', {keepGap: true});
             formatInitList(format, initializer);
         } else if (initializer.nodeName === NodeName.Assign) {
             format.pushIndent();
 
-            formatTargetBy(format, '=', {});
+            formatTargetBy(format, '=', {keepGap: true});
             formatAssign(format, initializer);
 
             format.popIndent();
@@ -606,7 +610,7 @@ function formatTypeModifier(format: FormatterState) {
     }
 
     if (next.text === '&') {
-        formatTargetBy(format, '&', {condenseLeft: true});
+        formatTargetBy(format, '&', {keepSpace: true});
 
         const next2 = formatMoveToNonComment(format);
         if (next2 === undefined) {
@@ -780,19 +784,20 @@ function formatSwitch(format: FormatterState, switchNode: Node_Switch) {
 
     formatTargetBy(format, 'switch', {});
 
-    formatParenthesesBlock(format, () => {
-        formatAssign(format, switchNode.assign);
-    });
-
-    formatBraceBlock(
+    formatParenthesesBlock(
         format,
         () => {
-            for (const caseNode of switchNode.caseList) {
-                formatCase(format, caseNode);
-            }
+            formatAssign(format, switchNode.assign);
         },
         false
     );
+
+    // case ikut menjorok satu level di dalam switch.
+    formatBraceBlock(format, () => {
+        for (const caseNode of switchNode.caseList) {
+            formatCase(format, caseNode);
+        }
+    });
 }
 
 // **BNF** BREAK ::= 'break' ';'
@@ -930,8 +935,11 @@ function formatIf(format: FormatterState, ifNode: Node_If) {
     }
 
     if (ifNode.elseStat !== undefined) {
-        formatTargetBy(format, 'else', {connectTail: true});
-        formatStatement(format, ifNode.elseStat, true);
+        // `} else` tetap satu baris, tapi `if (x) a;` + `else b;` jangan digabung: else turun ke baris baru.
+        const isThenBlock = ifNode.thenStat?.nodeName === NodeName.StatBlock;
+        formatTargetBy(format, 'else', {connectTail: isThenBlock, forceWrap: !isThenBlock});
+        // `else if` tidak ditambah indent, kalau tidak else milik if di dalamnya ikut menjorok.
+        formatStatement(format, ifNode.elseStat, ifNode.elseStat.nodeName !== NodeName.If);
     }
 }
 

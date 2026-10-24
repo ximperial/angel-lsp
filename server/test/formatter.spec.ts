@@ -70,13 +70,73 @@ pos.x=1; }
 `,
         /* after */ `
 class Position {
-    int x; // comment    is    here
+    int x;    // comment    is    here
     int y;
 }
 
 void main() {
     Position pos;
     pos.x = 1;
+}
+`
+    );
+});
+
+describe('formatter if/else', () => {
+    // else setelah statement non-block jangan ditempel ke baris sebelumnya; `} else` tetap satu baris.
+    testFormatter(
+        /* before */ `
+void main() {
+    int a = 0;
+    if (a == 1) a = 2;
+    else if (a == 3) a = 4;
+    else continue;
+    if (a == 5) {
+        a = 6;
+    } else {
+        a = 7;
+    }
+}
+`,
+        /* after */ `
+void main() {
+    int a = 0;
+    if (a == 1) a = 2;
+    else if (a == 3) a = 4;
+    else continue;
+    if (a == 5) {
+        a = 6;
+    } else {
+        a = 7;
+    }
+}
+`
+    );
+});
+
+describe('formatter repo style', () => {
+    // switch: spasi sebelum '(' dan case menjorok; komentar ujung baris, param lanjutan, dan `&in` dibiarkan.
+    testFormatter(
+        /* before */ `
+void f(int a,
+    const string &in s) {
+    int x = 1;   // satu
+    int yy = 2;  // dua
+    switch (a) {
+        case 0: x = 1; break;
+        default: break;
+    }
+}
+`,
+        /* after */ `
+void f(int a,
+    const string &in s) {
+    int x = 1;   // satu
+    int yy = 2;  // dua
+    switch (a) {
+        case 0: x = 1; break;
+        default: break;
+    }
 }
 `
     );
