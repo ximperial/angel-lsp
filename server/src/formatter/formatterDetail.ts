@@ -37,6 +37,12 @@ function formatTokenWithSpace(format: FormatterState, frontToken: TokenObject) {
         return;
     }
 
+    // Komentar di ujung baris kode: jarak aslinya dibiarkan (alignment komentar), asal minimal 1 spasi.
+    if (frontToken.kind === TokenKind.Comment && spaceEnd.character > spaceStart.character) {
+        format.setCursorToTail(frontToken);
+        return;
+    }
+
     const backToken = format.map.getTokenAt({line: spaceStart.line, character: spaceStart.character - 1});
     const editSpace = canInsertEditSpace(backToken, frontToken) ? ' ' : '';
 
@@ -67,6 +73,10 @@ export interface FormatTargetOption {
     condenseRight?: boolean;
     forceWrap?: boolean;
     connectTail?: boolean;
+    // Token di baris yang sama: spasi aslinya dibiarkan (alignment / gaya penulis).
+    keepSpace?: boolean;
+    // Seperti keepSpace, tapi hanya kalau sudah ada minimal 1 spasi (jadi `a=1` tetap dirapikan).
+    keepGap?: boolean;
 }
 
 export function formatMoveUntilNodeStart(format: FormatterState, node: NodeBase) {
@@ -177,6 +187,19 @@ function formatBlankLines(format: FormatterState, startLine: number, endLine: nu
     format.setCursor({line: endLine + 1, character: 0});
 }
 
+// True kalau baris `line` melanjutkan statement baris sebelumnya (param/operator yang dipecah ke beberapa baris).
+function isContinuationLine(format: FormatterState, line: number): boolean {
+    let i = line - 1;
+    while (i >= 0 && /^\s*$/.test(format.textLines[i])) i--;
+    if (i < 0) return false;
+
+    const prev = format.textLines[i].trim();
+    if (prev.startsWith('//') || prev.startsWith('/*') || prev.endsWith('*/') || prev.startsWith('#')) return false;
+
+    const code = prev.replace(/\s*\/\/.*$/, '');
+    return code.length > 0 && !/[;{}:]$/.test(code);
+}
+
 function executeFormatTargetWith(
     format: FormatterState,
     target: string,
@@ -192,6 +215,13 @@ function executeFormatTargetWith(
     }
 
     const forceWrap: boolean = format.popWrap() || option.forceWrap === true;
+
+    const hasGap = cursor.character > 0 && /\s/.test(format.getText(cursor.line, cursor.character - 1) ?? '');
+    if ((option.keepSpace === true || (option.keepGap === true && hasGap)) && forceWrap === false && next.location.start.line === format.getCursor().line) {
+        cursor.character += target.length;
+        format.setCursor(cursor);
+        return;
+    }
 
     const frontSpace = isCondenseLeft ? '' : ' ';
     const editEnd: Position = {line: next.location.start.line, character: next.location.start.character};
@@ -210,9 +240,17 @@ function executeFormatTargetWith(
         const editStart: Position = format.getCursor();
         const walkedBack = walkBackUntilWhitespace(format, editStart);
         if (walkedBack.character === 0) {
-            format.pushEdit(walkedBack, editEnd, format.getIndent());
+            // Lanjutan statement (baris sebelumnya belum selesai): indent buatan user dipertahankan.
+            if (!isContinuationLine(format, editEnd.line)) {
+                format.pushEdit(walkedBack, editEnd, format.getIndent());
+            }
         } else {
             const sameLine = editStart.line === editEnd.line;
+            if (!sameLine && isContinuationLine(format, editEnd.line)) {
+                cursor.character += target.length;
+                format.setCursor(cursor);
+                return;
+            }
             const editStart2: Position = sameLine ? walkedBack : walkBackUntilWhitespace(format, editEnd);
             const newText = sameLine ? (forceWrap ? '\n' + format.getIndent() : frontSpace) : format.getIndent();
             format.pushEdit(editStart2, editEnd, newText);

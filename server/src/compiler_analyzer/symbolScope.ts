@@ -131,6 +131,10 @@ export class SymbolScope {
     // Unlike linkedNode, this list excludes nodes coming from other files.
     private readonly _namespaceNodes: ScopeLinkedNamespaceNode[] = [];
 
+    // Files that declared anything in this scope or its descendants. A superset is fine; a missing file is not.
+    // includeExternalScope uses it to skip whole subtrees that belong to other files, e.g. all of as.predefined.
+    private _contributors: string | Set<string> | undefined;
+
     /**
      * The path of the scope. It is a list of identifiers from the global scope to this scope.
      */
@@ -149,6 +153,41 @@ export class SymbolScope {
         this._parentScope = parentScope;
 
         this.scopePath = parentScope !== undefined ? [...parentScope.scopePath, key] : [];
+
+        if (_linkedNode !== undefined) {
+            this.addContributor(_linkedNode.nodeRange.path);
+        }
+    }
+
+    /**
+     * Whether this scope or one of its descendants may hold something declared in the file `path`.
+     * It can report true for a file whose declarations were later replaced, but never false for one that has any.
+     */
+    public hasContributor(path: string): boolean {
+        const contributors = this._contributors;
+        return contributors === path || (typeof contributors === 'object' && contributors.has(path));
+    }
+
+    private addContributor(path: string) {
+        // Ancestors always contain what their descendants contain, so stop at the first one that already has it.
+        for (let scope: SymbolScope | undefined = this; scope !== undefined; scope = scope._parentScope) {
+            const contributors = scope._contributors;
+            if (contributors === undefined) {
+                scope._contributors = path;
+            } else if (typeof contributors === 'string') {
+                if (contributors === path) {
+                    return;
+                }
+
+                scope._contributors = new Set([contributors, path]);
+            } else {
+                if (contributors.has(path)) {
+                    return;
+                }
+
+                contributors.add(path);
+            }
+        }
     }
 
     public get parentScope(): SymbolScope | undefined {
@@ -170,10 +209,14 @@ export class SymbolScope {
     public setLinkedNode(node: ScopeLinkedNode | undefined) {
         assert(this._linkedNode === undefined);
         this._linkedNode = node;
+        if (node !== undefined) {
+            this.addContributor(node.nodeRange.path);
+        }
     }
 
     public replaceLinkedNode(node: ScopeLinkedNode) {
         this._linkedNode = node;
+        this.addContributor(node.nodeRange.path);
     }
 
     public get linkedNode(): ScopeLinkedNode | undefined {
@@ -249,6 +292,9 @@ export class SymbolScope {
 
     public pushUsingNamespace(node: Node_Using) {
         const scopePath: ScopePath = node.namespaceList.map(ns => ns.text);
+        for (const ns of node.namespaceList) {
+            this.addContributor(ns.location.path);
+        }
 
         const alreadyExists = this._usingNamespaces.find(exist => isScopePathEquals(exist.scopePath, scopePath));
         if (alreadyExists !== undefined) {
@@ -353,6 +399,7 @@ export class SymbolScope {
      */
     public insertSymbol(symbol: SymbolObject): SymbolObjectHolder | undefined {
         const identifier = symbol.identifierToken.text;
+        this.addContributor(symbol.identifierToken.location.path);
         const alreadyExists = this._symbolTable.get(identifier);
         const incomingHolder = symbol.toHolder();
         if (alreadyExists === undefined) {
@@ -425,6 +472,10 @@ export class SymbolScope {
     }
 
     protected includeExternalScope_internal(externalScope: SymbolScope, externalFilepath: string) {
+        if (externalScope.hasContributor(externalFilepath) === false) {
+            return;
+        }
+
         // Copy symbols from the external scope.
         for (const [key, symbolHolder] of externalScope._symbolTable) {
             for (const symbol of symbolHolder.toList()) {
@@ -447,11 +498,17 @@ export class SymbolScope {
                     scopePath: usingNamespace.scopePath,
                     linkedNodes: filteredNodes
                 });
+                this.addContributor(externalFilepath);
             }
         }
 
         // Copy child scopes recursively.
         for (const [key, otherChild] of externalScope._childScopeTable) {
+            if (otherChild.hasContributor(externalFilepath) === false) {
+                // Nothing in this subtree comes from the external file.
+                continue;
+            }
+
             // We only insert it if it is a node specific to the external file.
             const canInsertNode = otherChild.linkedNode?.nodeRange.path === externalFilepath;
 
@@ -466,10 +523,28 @@ export class SymbolScope {
                 otherChild._childScopeTable.size > 0 ||
                 otherChild._usingNamespaces.length > 0
             ) {
+                const isNewChild = this._childScopeTable.has(key) === false;
                 const thisChild = this.insertScope(key, canInsertNode ? otherChild.linkedNode : undefined);
                 thisChild.includeExternalScope_internal(otherChild, externalFilepath);
+
+                // A subtree holding nothing from the external file would be copied as an empty skeleton.
+                // Pure scopes are built from the whole merged tree, so without this every file carries empty
+                // scopes for every function and namespace of every other file, and each include multiplies them.
+                if (isNewChild && thisChild.isEmptySkeleton()) {
+                    this._childScopeTable.delete(key);
+                }
             }
         }
+    }
+
+    private isEmptySkeleton(): boolean {
+        return (
+            this._linkedNode === undefined &&
+            this._symbolTable.size === 0 &&
+            this._childScopeTable.size === 0 &&
+            this._usingNamespaces.length === 0 &&
+            this._namespaceNodes.length === 0
+        );
     }
 }
 
@@ -536,9 +611,8 @@ function errorAlreadyDeclared(token: TokenObject) {
     analyzerDiagnostic.error(token.location, `Symbol '${token.text}' is already declared in the scope.`);
 }
 
-function collectEnumScopeList(scope: SymbolScope): SymbolScope[] {
-    const result: SymbolScope[] = [];
-
+function collectEnumScopeList(scope: SymbolScope, result: SymbolScope[] = []): SymbolScope[] {
+    // One shared result array; spreading a fresh array per scope allocated heavily on large merged scopes.
     for (const child of scope.childScopeTable.values()) {
         if (child.isAnonymousScope()) {
             continue;
@@ -548,7 +622,7 @@ function collectEnumScopeList(scope: SymbolScope): SymbolScope[] {
             result.push(child);
         }
 
-        result.push(...collectEnumScopeList(child));
+        collectEnumScopeList(child, result);
     }
 
     return result;

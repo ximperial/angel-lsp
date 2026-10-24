@@ -63,7 +63,8 @@ import {
     SymbolScope,
     tryResolveActiveScope
 } from './symbolScope';
-import {checkFunctionCall} from './functionCall';
+import {checkFunctionCallWithMatch} from './functionCall';
+import {FunctionCallMarker} from './marker';
 import {checkTypeCast, assertTypeCast} from './typeCast';
 import {
     builtinBoolType,
@@ -1600,12 +1601,13 @@ function analyzeFunctionCall(
         calleeDelegateVariable?: VariableSymbol;
     }
 ) {
-    getActiveGlobalScope().markers.functionCall.push({
+    const callMarker: FunctionCallMarker = {
         callerIdentifier: callerIdentifier,
         callerArgumentsNode: callerArgList,
         calleeFuncHolder: calleeFuncHolder,
         calleeTemplateMapping: calleeTemplateMapping
-    });
+    };
+    getActiveGlobalScope().markers.functionCall.push(callMarker);
 
     const callerArgTypes = analyzeArgList(scope, callerArgList);
     const callerArgs = callerArgList.argList.map((arg, i) => ({
@@ -1629,7 +1631,7 @@ function analyzeFunctionCall(
         }
     }
 
-    return checkFunctionCall({
+    const callResult = checkFunctionCallWithMatch({
         callerIdentifier: callerIdentifier,
         callerRange: callerArgList.nodeRange,
         callerArgs: callerArgs,
@@ -1638,6 +1640,8 @@ function analyzeFunctionCall(
         calleeTemplateMapping: calleeTemplateMapping,
         calleeDelegateVariable: options?.calleeDelegateVariable
     });
+    callMarker.resolvedCallee = callResult.bestMatching;
+    return callResult.returnType;
 }
 
 // **BNF** VARACCESS ::= SCOPE IDENTIFIER
@@ -2090,8 +2094,11 @@ function analyzeCompOp(
 }
 
 function canReferenceComparison(lhs: ResolvedType, rhs: ResolvedType): boolean {
-    const lhsIsReference = lhs.handle !== undefined || lhs.isNullType();
-    const rhsIsReference = rhs.handle !== undefined || rhs.isNullType();
+    // A script class instance (e.g. `this`) is a reference type, so `is` compares it without an explicit handle.
+    const isScriptClass = (t: ResolvedType) =>
+        t.typeOrFunc.isFunction() === false && t.typeOrFunc.linkedNode?.nodeName === NodeName.Class;
+    const lhsIsReference = lhs.handle !== undefined || lhs.isNullType() || isScriptClass(lhs);
+    const rhsIsReference = rhs.handle !== undefined || rhs.isNullType() || isScriptClass(rhs);
     if (lhsIsReference === false || rhsIsReference === false) {
         return false;
     }

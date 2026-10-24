@@ -25,6 +25,7 @@ import {documentOnTypeFormattingProvider} from './services/documentOnTypeFormatt
 import {SimpleProfiler} from './utils/simpleProfiler';
 import {printSymbolScope} from './compiler_analyzer/symbolUtils';
 import {safeWriteFile} from './utils/fileUtils';
+import {clearFileExistenceCache} from './service/fileUtils';
 import {moveInlayHintByChanges} from './service/contentChangeApplier';
 import {provideDefinitionFallback} from './services/definitionExtension';
 import {CodeActionWrapper} from './actions/utils';
@@ -241,8 +242,9 @@ s_connection.workspace.onDidDeleteFiles(params => {
 // FIXME: Should we also handle `onWillSaveTextDocument`, `onWillSaveTextDocumentWaitUntil` and `onDidSaveTextDocument`?
 
 s_connection.onDidChangeWatchedFiles(params => {
-    // We may not need to do anything here.
+    // Content changes arrive through the text document events; only file existence may be stale here.
     // https://github.com/microsoft/vscode-discussions/discussions/511
+    clearFileExistenceCache();
 });
 
 function profileInspect(document: lsp_textDocument.TextDocument) {
@@ -479,7 +481,12 @@ s_connection.onSignatureHelp(params => {
         return null;
     }
 
-    return provideSignatureHelp(diagnosedScope.globalScope, params.position, uri);
+    return provideSignatureHelp(
+        diagnosedScope.globalScope,
+        params.position,
+        uri,
+        params.context?.activeSignatureHelp
+    );
 });
 
 // -----------------------------------------------

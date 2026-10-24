@@ -1,4 +1,5 @@
-import {FunctionSymbol, FunctionSymbolHolder, VariableSymbol} from './symbolObject';
+import {FunctionSymbol, FunctionSymbolHolder, isScopePathEquals, VariableSymbol} from './symbolObject';
+import {areFunctionsOverloadEquals} from './functionOverload';
 import {getActiveGlobalScope, tryResolveActiveScope} from './symbolScope';
 import {applyTemplateMapping, ResolvedType, TemplateMapping} from './resolvedType';
 import {analyzerDiagnostic} from './analyzerDiagnostic';
@@ -55,9 +56,19 @@ export function evaluateFunctionCall(args: FunctionCallArgs): FunctionCallResult
  * If the call is valid, trigger side effects and return the resolved return type.
  */
 export function checkFunctionCall(args: FunctionCallArgs): ResolvedType | undefined {
+    return checkFunctionCallWithMatch(args).returnType;
+}
+
+/**
+ * Same as `checkFunctionCall`, but also reports which overload was chosen.
+ */
+export function checkFunctionCallWithMatch(args: FunctionCallArgs): {
+    returnType: ResolvedType | undefined;
+    bestMatching: FunctionSymbol | undefined;
+} {
     const result = checkFunctionCallInternal(args);
     result.sideEffect();
-    return result.returnType;
+    return {returnType: result.returnType, bestMatching: result.bestMatching};
 }
 
 // -----------------------------------------------
@@ -164,6 +175,7 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
 
     bestMatchings = dropConstOverloadsWhenMutableExists(args, bestMatchings);
     bestMatchings = dropPredefinedOverloadsWhenProjectExists(bestMatchings);
+    bestMatchings = dropOverriddenBaseOverloads(bestMatchings);
     const hasAmbiguousOverload = bestMatchings.length > 1;
     const bestMatching = bestMatchings[0];
 
@@ -214,6 +226,23 @@ function checkFunctionCallInternal(args: FunctionCallArgs): FunctionCallResult {
 function dropPredefinedOverloadsWhenProjectExists(matchings: BestMatching[]): BestMatching[] {
     const projectMatchings = matchings.filter(matching => !isPredefinedFunction(matching.function));
     return projectMatchings.length > 0 ? projectMatchings : matchings;
+}
+
+// A derived class inherits the base members into its own scope, so an override and the method it overrides both
+// arrive as candidates with the same signature. The one declared in the more derived class (inserted first) wins.
+function dropOverriddenBaseOverloads(matchings: BestMatching[]): BestMatching[] {
+    if (matchings.length < 2) {
+        return matchings;
+    }
+
+    return matchings.filter((matching, index) => {
+        return !matchings.slice(0, index).some(earlier => {
+            return (
+                isScopePathEquals(earlier.function.scopePath, matching.function.scopePath) === false &&
+                areFunctionsOverloadEquals(earlier.function, matching.function)
+            );
+        });
+    });
 }
 
 function getPreferredFunction(holder: FunctionSymbolHolder): FunctionSymbol {

@@ -102,13 +102,17 @@ function applyHighlight(token: TokenObject, info: HighlightInfo | undefined) {
     token.setHighlight(info.type, info.modifier as TokenHighlightModifier);
 }
 
-function forEachSymbol(scope: SymbolScope, visit: (symbol: SymbolObject) => void) {
+// The merged global scope also holds every included file; only subtrees that the file contributed to can hold
+// its declarations, so the rest (e.g. all of as.predefined) is skipped.
+function forEachSymbol(scope: SymbolScope, filepath: string, visit: (symbol: SymbolObject) => void) {
     for (const holder of scope.symbolTable.values()) {
         holder.toList().forEach(visit);
     }
 
     for (const child of scope.childScopeTable.values()) {
-        forEachSymbol(child, visit);
+        if (child.hasContributor(filepath)) {
+            forEachSymbol(child, filepath, visit);
+        }
     }
 }
 
@@ -145,7 +149,7 @@ export function refineSemanticHighlights(uri: string, globalScope: SymbolGlobalS
 
     try {
         const declaration = modifierBit(TokenHighlightModifier.Declaration);
-        forEachSymbol(globalScope, symbol => {
+        forEachSymbol(globalScope, globalScope.getContext().filepath, symbol => {
             if (isInTarget(symbol.identifierToken) === false) {
                 return;
             }

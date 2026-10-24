@@ -50,7 +50,7 @@ function testFormatter(content: string, expectedContent: string) {
             const difference = `difference: ${getDiffLineNumber(expected, actual)}`;
             const hr = '-----------------------------------------------';
             throw new Error(
-                `${hr} expected\n${makeVisible(actual)}\n${hr} actual\n${makeVisible(expected)}\n${hr}\n${difference}`
+                `${hr} expected\n${makeVisible(expected)}\n${hr} actual\n${makeVisible(actual)}\n${hr}\n${difference}`
             );
         }
     });
@@ -70,13 +70,149 @@ pos.x=1; }
 `,
         /* after */ `
 class Position {
-    int x; // comment    is    here
+    int x;    // comment    is    here
     int y;
 }
 
 void main() {
     Position pos;
     pos.x = 1;
+}
+`
+    );
+
+    testFormatter(
+        /* before */ `
+void foo(){
+if( not  value or not( ~ bar>1 and ++ bar<10) ){
+return;}}
+`,
+        /* after */ `
+void foo() {
+    if (not value or not (~bar > 1 and ++bar < 10)) {
+        return;
+    }
+}
+`
+    );
+
+    testFormatter(
+        /* before */ `
+void foo(){
+if( not not  value or not( ~ bar>1 and ++ bar<10) ){
+return;}}
+`,
+        /* after */ `
+void foo() {
+    if (not not value or not (~bar > 1 and ++bar < 10)) {
+        return;
+    }
+}
+`
+    );
+
+    // Fork: empty blocks keep what the author wrote, so `{}` stays `{}` (upstream prints `{ }`).
+    testFormatter(
+        /* before */ `
+class script:callback_base,something_else{}
+`,
+        /* after */ `
+class script : callback_base, something_else {}
+`
+    );
+
+    testFormatter(
+        /* before */ `
+interface IChild:IBase{}
+`,
+        /* after */ `
+interface IChild : IBase {}
+`
+    );
+
+    testFormatter(
+        /* before */ `
+class Child:NS::Base{}
+`,
+        /* after */ `
+class Child : NS::Base {}
+`
+    );
+
+    testFormatter(
+        /* before */ `
+class Child : ::Base {}
+`,
+        /* after */ `
+class Child : ::Base {}
+`
+    );
+
+    testFormatter(
+        /* before */ `
+class Child{}
+`,
+        /* after */ `
+class Child {}
+`
+    );
+});
+
+describe('formatter if/else', () => {
+    // else setelah statement non-block jangan ditempel ke baris sebelumnya; `} else` tetap satu baris.
+    testFormatter(
+        /* before */ `
+void main() {
+    int a = 0;
+    if (a == 1) a = 2;
+    else if (a == 3) a = 4;
+    else continue;
+    if (a == 5) {
+        a = 6;
+    } else {
+        a = 7;
+    }
+}
+`,
+        /* after */ `
+void main() {
+    int a = 0;
+    if (a == 1) a = 2;
+    else if (a == 3) a = 4;
+    else continue;
+    if (a == 5) {
+        a = 6;
+    } else {
+        a = 7;
+    }
+}
+`
+    );
+});
+
+describe('formatter repo style', () => {
+    // switch: spasi sebelum '(' dan case menjorok; komentar ujung baris, param lanjutan, dan `&in` dibiarkan.
+    testFormatter(
+        /* before */ `
+void f(int a,
+    const string &in s) {
+    int x = 1;   // satu
+    int yy = 2;  // dua
+    switch (a) {
+        case 0: x = 1; break;
+        default: break;
+    }
+}
+`,
+        /* after */ `
+void f(int a,
+    const string &in s) {
+    int x = 1;   // satu
+    int yy = 2;  // dua
+    switch (a) {
+        case 0: x = 1; break;
+        default: break;
+    }
 }
 `
     );
